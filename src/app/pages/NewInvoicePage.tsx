@@ -1,0 +1,531 @@
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Form,
+  Input,
+  Select,
+  DatePicker,
+  Button,
+  Table,
+  Space,
+  Card,
+  message,
+  InputNumber,
+  Divider,
+  Modal,
+} from 'antd';
+import {
+  PlusOutlined,
+  DeleteOutlined,
+  SaveOutlined,
+  FilePdfOutlined,
+} from '@ant-design/icons';
+import { useNavigate, useLocation } from 'react-router-dom';
+import dayjs from 'dayjs';
+
+import { Invoice, InvoiceItem, Client, CURRENCY_VALUES } from '../types';
+import { invoiceService, clientService, settingsService } from '../services/storage';
+import { useTranslation } from 'react-i18next';
+import { getNumberLocale, normalizeLanguage } from '../i18n';
+
+type LocationState =
+  | { duplicate?: Invoice; duplicateId?: string }
+  | { edit?: Invoice; editId?: string }
+  | undefined;
+
+export function NewInvoicePage() {
+  const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const state = location.state as LocationState;
+
+  const numberLocale = getNumberLocale(normalizeLanguage(i18n.language));
+
+  const [form] = Form.useForm();
+  const [items, setItems] = useState<InvoiceItem[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [isClientModalVisible, setIsClientModalVisible] = useState(false);
+  const [clientForm] = Form.useForm();
+
+  const editId = useMemo(() => {
+    if (!state) return undefined;
+    if ('editId' in state && state.editId) return state.editId;
+    if ('edit' in state && state.edit?.id) return state.edit.id;
+    return undefined;
+  }, [state]);
+
+  const duplicateId = useMemo(() => {
+    if (!state) return undefined;
+    if ('duplicateId' in state && state.duplicateId) return state.duplicateId;
+    if ('duplicate' in state && state.duplicate?.id) return state.duplicate.id;
+    return undefined;
+  }, [state]);
+
+  const isEditMode = !!editId;
+
+  useEffect(() => {
+    setClients(clientService.getAll());
+
+    if (editId) {
+      const existing = invoiceService.getById(editId);
+      if (!existing) {
+        message.error(t('newInvoice.notFound'));
+        navigate('/');
+        return;
+      }
+
+      form.setFieldsValue({
+        clientId: existing.clientId,
+        issueDate: dayjs(existing.issueDate),
+        serviceDate: dayjs(existing.serviceDate),
+        currency: existing.currency,
+        notes: existing.notes,
+      });
+      setItems(existing.items);
+      return;
+    }
+
+    if (duplicateId) {
+      const existing = invoiceService.getById(duplicateId);
+      if (!existing) {
+        message.error(t('newInvoice.notFound'));
+        navigate('/');
+        return;
+      }
+
+      form.setFieldsValue({
+        clientId: existing.clientId,
+        issueDate: dayjs(),
+        serviceDate: dayjs(),
+        currency: existing.currency,
+        notes: existing.notes,
+      });
+      setItems(existing.items);
+      return;
+    }
+
+    if (state && 'duplicate' in state && state.duplicate) {
+      const d = state.duplicate;
+      form.setFieldsValue({
+        clientId: d.clientId,
+        issueDate: dayjs(),
+        serviceDate: dayjs(),
+        currency: d.currency,
+        notes: d.notes,
+      });
+      setItems(d.items);
+      return;
+    }
+
+    const settings = settingsService.get();
+    form.setFieldsValue({
+      issueDate: dayjs(),
+      serviceDate: dayjs(),
+      currency: settings.defaultCurrency,
+    });
+    setItems([]);
+  }, [editId, duplicateId, state, form, navigate]);
+
+  const handleAddItem = () => {
+    const newItem: InvoiceItem = {
+      id: Date.now().toString(),
+      description: '',
+      quantity: 1,
+      unitPrice: 0,
+      total: 0,
+    };
+    setItems((prev) => [...prev, newItem]);
+  };
+
+  const handleRemoveItem = (id: string) => {
+    setItems((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const handleItemChange = (
+    id: string,
+    field: keyof InvoiceItem,
+    value: string | number
+  ) => {
+    setItems((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        const updated: InvoiceItem = { ...item, [field]: value } as InvoiceItem;
+        if (field === 'quantity' || field === 'unitPrice') {
+          updated.total = updated.quantity * updated.unitPrice;
+        }
+        return updated;
+      })
+    );
+  };
+
+  const calculateTotals = () => {
+    const subtotal = items.reduce((sum, item) => sum + item.total, 0);
+    return { subtotal, total: subtotal };
+  };
+
+  const handleAddClient = (values: Omit<Client, 'id' | 'createdAt'>) => {
+    const newClient = clientService.create(values);
+    setClients((prev) => [...prev, newClient]);
+    form.setFieldValue('clientId', newClient.id);
+    setIsClientModalVisible(false);
+    clientForm.resetFields();
+    message.success(t('clients.created'));
+  };
+
+  const handleSave = (exportPDF = false) => {
+    form
+      .validateFields()
+      .then((values) => {
+        if (items.length === 0) {
+          message.error(t('newInvoice.needItem'));
+          return;
+        }
+
+        const hasInvalidItems = items.some(
+          (item) => !item.description || item.quantity <= 0 || item.unitPrice <= 0
+        );
+        if (hasInvalidItems) {
+          message.error(t('newInvoice.invalidItems'));
+          return;
+        }
+
+        const client = clients.find((c) => c.id === values.clientId);
+        if (!client) {
+          message.error(t('newInvoice.clientNotFound'));
+          return;
+        }
+
+        const totals = calculateTotals();
+
+        if (editId) {
+          const updated: Partial<Invoice> = {
+            clientId: values.clientId,
+            clientName: client.name,
+            issueDate: values.issueDate.format('YYYY-MM-DD'),
+            serviceDate: values.serviceDate.format('YYYY-MM-DD'),
+            currency: values.currency,
+            items,
+            subtotal: totals.subtotal,
+            total: totals.total,
+            notes: values.notes || '',
+          };
+
+          const saved = invoiceService.update(editId, updated);
+          if (!saved) {
+            message.error(t('newInvoice.notFound'));
+            navigate('/');
+            return;
+          }
+
+          message.success(t('newInvoice.updated'));
+
+          if (exportPDF) {
+            message.info(t('newInvoice.exportInDev'));
+          }
+
+          navigate(`/invoices/view/${editId}`);
+          return;
+        }
+
+        const invoiceNumber = settingsService.generateInvoiceNumber();
+
+        const invoice: Omit<Invoice, 'id' | 'createdAt'> = {
+          invoiceNumber,
+          clientId: values.clientId,
+          clientName: client.name,
+          issueDate: values.issueDate.format('YYYY-MM-DD'),
+          serviceDate: values.serviceDate.format('YYYY-MM-DD'),
+          currency: values.currency,
+          items,
+          subtotal: totals.subtotal,
+          total: totals.total,
+          notes: values.notes || '',
+        };
+
+        invoiceService.create(invoice);
+        message.success(t('newInvoice.created'));
+
+        if (exportPDF) {
+          message.info(t('newInvoice.exportInDev'));
+        }
+
+        navigate('/');
+      })
+      .catch(() => {});
+  };
+
+  const totals = calculateTotals();
+
+  const itemColumns = [
+    {
+      title: t('newInvoice.description'),
+      dataIndex: 'description',
+      key: 'description',
+      width: '40%',
+      render: (_: string, record: InvoiceItem) => (
+        <Input
+          placeholder={t('newInvoice.descriptionPlaceholder')}
+          value={record.description}
+          onChange={(e) =>
+            handleItemChange(record.id, 'description', e.target.value)
+          }
+        />
+      ),
+    },
+    {
+      title: t('newInvoice.quantity'),
+      dataIndex: 'quantity',
+      key: 'quantity',
+      width: '15%',
+      render: (_: number, record: InvoiceItem) => (
+        <InputNumber
+          min={0.01}
+          step={0.01}
+          value={record.quantity}
+          onChange={(value) =>
+            handleItemChange(record.id, 'quantity', value || 0)
+          }
+          style={{ width: '100%' }}
+        />
+      ),
+    },
+    {
+      title: t('newInvoice.unitPrice'),
+      dataIndex: 'unitPrice',
+      key: 'unitPrice',
+      width: '20%',
+      render: (_: number, record: InvoiceItem) => (
+        <InputNumber
+          min={0}
+          step={0.01}
+          value={record.unitPrice}
+          onChange={(value) =>
+            handleItemChange(record.id, 'unitPrice', value || 0)
+          }
+          style={{ width: '100%' }}
+          formatter={(value) =>
+            `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+          }
+        />
+      ),
+    },
+    {
+      title: t('newInvoice.lineTotal'),
+      dataIndex: 'total',
+      key: 'total',
+      width: '20%',
+      render: (total: number) => (
+        <strong>
+          {total.toLocaleString(numberLocale, { minimumFractionDigits: 2 })}
+        </strong>
+      ),
+    },
+    {
+      title: '',
+      key: 'actions',
+      width: '5%',
+      render: (_: unknown, record: InvoiceItem) => (
+        <Button
+          type="text"
+          danger
+          icon={<DeleteOutlined />}
+          onClick={() => handleRemoveItem(record.id)}
+        />
+      ),
+    },
+  ];
+
+  return (
+    <div>
+      <div
+        style={{
+          marginBottom: 24,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
+        <h2 style={{ margin: 0 }}>
+          {isEditMode ? t('newInvoice.titleEdit') : t('newInvoice.titleNew')}
+        </h2>
+        <Space>
+          <Button
+            onClick={() =>
+              isEditMode && editId
+                ? navigate(`/invoices/view/${editId}`)
+                : navigate('/')
+            }
+          >
+            {t('common.cancel')}
+          </Button>
+          <Button icon={<SaveOutlined />} onClick={() => handleSave(false)}>
+            {t('common.save')}
+          </Button>
+          <Button
+            type="primary"
+            icon={<FilePdfOutlined />}
+            onClick={() => handleSave(true)}
+          >
+            {t('newInvoice.saveAndExport')}
+          </Button>
+        </Space>
+      </div>
+
+      <Form form={form} layout="vertical" size="large">
+        <Card title={t('newInvoice.basicInfo')} style={{ marginBottom: 24 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <Form.Item
+              label={t('newInvoice.selectClient')}
+              name="clientId"
+              rules={[{ required: true, message: t('newInvoice.selectClient') }]}
+            >
+              <Select
+                placeholder={t('newInvoice.selectClient')}
+                showSearch
+                optionFilterProp="label"
+                options={clients.map((c) => ({ label: c.name, value: c.id }))}
+                dropdownRender={(menu) => (
+                  <>
+                    {menu}
+                    <Divider style={{ margin: '8px 0' }} />
+                    <Button
+                      type="link"
+                      icon={<PlusOutlined />}
+                      onClick={() => setIsClientModalVisible(true)}
+                      style={{ width: '100%' }}
+                    >
+                      {t('newInvoice.addNewClient')}
+                    </Button>
+                  </>
+                )}
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={t('newInvoice.selectCurrency')}
+              name="currency"
+              rules={[{ required: true, message: t('newInvoice.selectCurrency') }]}
+            >
+              <Select
+                placeholder={t('newInvoice.selectCurrency')}
+                options={CURRENCY_VALUES.map((c) => ({ value: c, label: t(`currencies.${c}`) }))}
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={t('newInvoice.issueDate')}
+              name="issueDate"
+              rules={[{ required: true, message: t('newInvoice.issueDate') }]}
+            >
+              <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" />
+            </Form.Item>
+
+            <Form.Item
+              label={t('newInvoice.serviceDate')}
+              name="serviceDate"
+              rules={[{ required: true, message: t('newInvoice.serviceDate') }]}
+            >
+              <DatePicker style={{ width: '100%' }} format="DD.MM.YYYY" />
+            </Form.Item>
+          </div>
+        </Card>
+
+        <Card
+          title={t('newInvoice.invoiceItems')}
+          extra={
+            <Button type="dashed" icon={<PlusOutlined />} onClick={handleAddItem}>
+              {t('newInvoice.addItem')}
+            </Button>
+          }
+          style={{ marginBottom: 24 }}
+        >
+          <Table
+            columns={itemColumns}
+            dataSource={items}
+            rowKey="id"
+            pagination={false}
+            locale={{ emptyText: t('newInvoice.emptyItems') }}
+          />
+        </Card>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 400px', gap: 24 }}>
+          <Card title={t('newInvoice.notes')}>
+            <Form.Item name="notes" style={{ marginBottom: 0 }}>
+              <Input.TextArea rows={6} placeholder={t('newInvoice.notesPlaceholder')} />
+            </Form.Item>
+          </Card>
+
+          <Card title={t('newInvoice.summary')}>
+            <div style={{ fontSize: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+                <span>{t('newInvoice.subtotal')}:</span>
+                <strong>
+                  {totals.subtotal.toLocaleString(numberLocale, { minimumFractionDigits: 2 })}
+                </strong>
+              </div>
+              <Divider style={{ margin: '12px 0' }} />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 18 }}>
+                <strong>{t('newInvoice.total')}:</strong>
+                <strong style={{ color: '#1890ff' }}>
+                  {totals.total.toLocaleString(numberLocale, { minimumFractionDigits: 2 })}{' '}
+                  {form.getFieldValue('currency') || 'RSD'}
+                </strong>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </Form>
+
+      <Modal
+        title={t('newInvoice.clientModalTitle')}
+        open={isClientModalVisible}
+        onCancel={() => {
+          setIsClientModalVisible(false);
+          clientForm.resetFields();
+        }}
+        footer={null}
+      >
+        <Form form={clientForm} layout="vertical" onFinish={handleAddClient}>
+          <Form.Item
+            label={t('clients.name')}
+            name="name"
+            rules={[{ required: true, message: t('clients.nameReq') }]}
+          >
+            <Input placeholder={t('clients.companyNamePlaceholder')} />
+          </Form.Item>
+          <Form.Item
+            label={t('clients.vatId')}
+            name="pib"
+            rules={[{ required: true, message: t('clients.vatReq') }]}
+          >
+            <Input placeholder="123456789" />
+          </Form.Item>
+          <Form.Item
+            label={t('clients.address')}
+            name="address"
+            rules={[{ required: true, message: t('clients.addressReq') }]}
+          >
+            <Input placeholder="Ulica i broj, grad" />
+          </Form.Item>
+          <Form.Item
+            label={t('clients.email')}
+            name="email"
+            rules={[
+              { required: true, message: t('clients.emailReq') },
+              { type: 'email', message: t('clients.emailInvalid') },
+            ]}
+          >
+            <Input placeholder="kontakt@firma.rs" />
+          </Form.Item>
+          <Form.Item>
+            <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
+              <Button onClick={() => setIsClientModalVisible(false)}>{t('common.cancel')}</Button>
+              <Button type="primary" htmlType="submit">
+                {t('clients.add')}
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
+    </div>
+  );
+}
