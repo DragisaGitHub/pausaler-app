@@ -1,12 +1,11 @@
-import {clientService, invoiceService, resetInvoicingStorage} from './storage';
-
-resetInvoicingStorage();
+import { clientService, invoiceService } from './storage';
 
 export const seedDemoData = () => {
-  // Check if data already exists
+  // Seed only on empty store (avoid corrupting real user data)
   const existingClients = clientService.getAll();
-  if (existingClients.length > 0) {
-    return; // Data already seeded
+  const existingInvoices = invoiceService.getAll();
+  if (existingClients.length > 0 || existingInvoices.length > 0) {
+    return;
   }
 
   // Create demo clients
