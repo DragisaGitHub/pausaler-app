@@ -75,6 +75,8 @@ export const sr = {
     invalidItems: 'Popunite sve stavke ispravno',
     updated: 'Faktura je uspešno ažurirana',
     created: 'Faktura je uspešno kreirana',
+    saveError: 'Greška pri čuvanju fakture',
+    validationError: 'Molimo ispravite označena polja',
     exportInDev: 'Export PDF funkcionalnost - u razvoju',
     basicInfo: 'Osnovne informacije',
     invoiceItems: 'Stavke fakture',

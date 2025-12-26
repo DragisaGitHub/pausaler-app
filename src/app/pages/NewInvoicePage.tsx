@@ -237,10 +237,9 @@ export function NewInvoicePage() {
         return;
       }
 
-      const invoiceNumber = await storage.generateInvoiceNumber();
-
       const invoice: Omit<Invoice, 'id' | 'createdAt'> = {
-        invoiceNumber,
+        // Invoice number is generated atomically on the Rust side.
+        invoiceNumber: '',
         clientId: values.clientId,
         clientName: client.name,
         issueDate: values.issueDate.format('YYYY-MM-DD'),
@@ -251,7 +250,6 @@ export function NewInvoicePage() {
         total: totals.total,
         notes: values.notes || '',
       };
-
       await storage.createInvoice(invoice);
       message.success(t('newInvoice.created'));
 
@@ -260,8 +258,14 @@ export function NewInvoicePage() {
       }
 
       navigate('/');
-    } catch {
-      // validation errors handled by antd
+    } catch (error) {
+      const anyError = error as any;
+      if (anyError?.errorFields) {
+        // Form validation errors are also shown inline by antd.
+        message.error(t('newInvoice.validationError'));
+        return;
+      }
+      message.error(t('newInvoice.saveError'));
     }
   };
 
