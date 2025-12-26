@@ -75,6 +75,8 @@ export const en = {
     invalidItems: 'Fill in all items correctly',
     updated: 'Invoice updated successfully',
     created: 'Invoice created successfully',
+    saveError: 'Error saving invoice',
+    validationError: 'Please fix the highlighted fields',
     exportInDev: 'PDF export is under development',
     basicInfo: 'Basic information',
     invoiceItems: 'Invoice items',

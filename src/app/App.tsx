@@ -22,13 +22,8 @@ export default function App() {
 
   useEffect(() => {
     void (async () => {
-      const [settings, clients, invoices] = await Promise.all([
-        storage.getSettings(),
-        storage.getAllClients(),
-        storage.getAllInvoices(),
-      ]);
-
-      const shouldSetup = !settings.isConfigured && clients.length === 0 && invoices.length === 0;
+      const settings = await storage.getSettings();
+      const shouldSetup = settings.isConfigured !== true;
       setNeedsSetup(shouldSetup);
 
       const lang = normalizeLanguage(settings.language);
@@ -36,9 +31,6 @@ export default function App() {
         void i18n.changeLanguage(lang);
       }
     })();
-  }, []);
-
-  useEffect(() => {
   }, []);
 
   const appLang = normalizeLanguage(i18nFromHook.language);
