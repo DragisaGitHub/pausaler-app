@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Button, Card, Descriptions, Table, Divider, Space, message, Alert } from 'antd';
+import { Button, Card, Descriptions, Table, Divider, Space, message } from 'antd';
 import { ArrowLeftOutlined, EditOutlined, FilePdfOutlined } from '@ant-design/icons';
-import { Invoice, InvoiceItem } from '../types';
-import { invoiceService, clientService, settingsService } from '../services/storage';
+import { Client, Invoice, InvoiceItem, Settings } from '../types';
+import { getStorage } from '../services/storageProvider';
 import dayjs from 'dayjs';
 import {
   buildInvoicePdfPayload,
@@ -13,42 +13,44 @@ import {
 import { useTranslation } from 'react-i18next';
 import { getNumberLocale, normalizeLanguage } from '../i18n';
 
+const storage = getStorage();
+
 export function InvoiceViewPage() {
   const { t, i18n } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
 
   const [invoice, setInvoice] = useState<Invoice | null>(null);
+  const [client, setClient] = useState<Client | undefined>(undefined);
+  const [settings, setSettings] = useState<Settings | null>(null);
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     if (!id) return;
 
-    const data = invoiceService.getById(id);
-    if (data) {
-      setInvoice(data);
-    } else {
-      message.error(t('invoices.notFound'));
-      navigate('/');
-    }
+    void (async () => {
+      const data = await storage.getInvoiceById(id);
+      if (data) {
+        setInvoice(data);
+      } else {
+        message.error(t('invoices.notFound'));
+        navigate('/');
+      }
+    })();
   }, [id, navigate, t]);
 
-  const settings = settingsService.get();
+  useEffect(() => {
+    void storage.getSettings().then(setSettings);
+  }, []);
 
-  const isDefaultCompany = useMemo(() => {
-    return (
-      settings.companyName === 'Moja Firma DOO' &&
-      settings.pib === '123456789' &&
-      settings.address === 'Bulevar kralja Aleksandra 1, Beograd' &&
-      settings.bankAccount === '160-5100000000000-00'
-    );
-  }, [settings]);
+  useEffect(() => {
+    if (!invoice) return;
+    void storage.getClientById(invoice.clientId).then(setClient);
+  }, [invoice]);
 
-  if (!invoice) return null;
+  if (!invoice || !settings) return null;
 
   const numberLocale = getNumberLocale(normalizeLanguage(i18n.language));
-
-  const client = clientService.getAll().find((c) => c.id === invoice.clientId);
 
   const handleExportPdf = async () => {
     if (exporting) return;
@@ -58,12 +60,14 @@ export function InvoiceViewPage() {
       return;
     }
 
-    if (!settings.companyName || !settings.pib || !settings.address || !settings.bankAccount) {
+    if (!settings.isConfigured || !settings.companyName || !settings.pib || !settings.address || !settings.bankAccount) {
       message.error(t('invoiceView.missingCompany'));
       return;
     }
 
-    const payload = buildInvoicePdfPayload({ invoice, client, settings });
+    const latestClient = await storage.getClientById(invoice.clientId);
+
+    const payload = buildInvoicePdfPayload({ invoice, client: latestClient, settings });
 
     try {
       setExporting(true);
@@ -146,16 +150,6 @@ export function InvoiceViewPage() {
           </Button>
         </Space>
       </div>
-
-      {isDefaultCompany && (
-        <Alert
-          style={{ marginBottom: 16 }}
-          type="info"
-          showIcon
-          message={t('invoiceView.defaultCompanyInfo')}
-          description={t('invoiceView.defaultCompanyDesc')}
-        />
-      )}
 
       <Card>
         <div style={{ marginBottom: 32 }}>

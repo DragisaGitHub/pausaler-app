@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { Layout, Menu, theme } from 'antd';
 import { FileTextOutlined, UserOutlined, SettingOutlined, DashboardOutlined } from '@ant-design/icons';
-import { Link, Outlet, useLocation } from 'react-router-dom';
+import { Link, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 const { Header, Sider, Content } = Layout;
 
-export function MainLayout() {
+export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
   const { t } = useTranslation();
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
@@ -14,21 +14,28 @@ export function MainLayout() {
     token: { colorBgContainer },
   } = theme.useToken();
 
+  if (needsSetup && location.pathname !== '/setup') {
+    return <Navigate to="/setup" replace />;
+  }
+
   const menuItems = [
     {
       key: '/',
       icon: <DashboardOutlined />,
-      label: <Link to="/">{t('nav.invoices')}</Link>,
+      disabled: needsSetup,
+      label: needsSetup ? <span>{t('nav.invoices')}</span> : <Link to="/">{t('nav.invoices')}</Link>,
     },
     {
       key: '/clients',
       icon: <UserOutlined />,
-      label: <Link to="/clients">{t('nav.clients')}</Link>,
+      disabled: needsSetup,
+      label: needsSetup ? <span>{t('nav.clients')}</span> : <Link to="/clients">{t('nav.clients')}</Link>,
     },
     {
       key: '/settings',
       icon: <SettingOutlined />,
-      label: <Link to="/settings">{t('nav.settings')}</Link>,
+      disabled: needsSetup,
+      label: needsSetup ? <span>{t('nav.settings')}</span> : <Link to="/settings">{t('nav.settings')}</Link>,
     },
   ];
 

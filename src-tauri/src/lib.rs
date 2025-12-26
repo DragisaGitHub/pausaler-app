@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
+use tauri_plugin_sql::{Migration, MigrationKind};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InvoicePdfCompany {
@@ -299,7 +300,73 @@ fn greet(name: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let migrations = vec![
+        Migration {
+            version: 1,
+            description: "create_initial_tables",
+            sql: r#"
+                PRAGMA foreign_keys = ON;
+
+                CREATE TABLE IF NOT EXISTS app_meta (
+                    key TEXT PRIMARY KEY NOT NULL,
+                    value TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS settings (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    isConfigured INTEGER,
+                    companyName TEXT NOT NULL,
+                    pib TEXT NOT NULL,
+                    address TEXT NOT NULL,
+                    bankAccount TEXT NOT NULL,
+                    logoUrl TEXT NOT NULL,
+                    invoicePrefix TEXT NOT NULL,
+                    nextInvoiceNumber INTEGER NOT NULL,
+                    defaultCurrency TEXT NOT NULL,
+                    language TEXT NOT NULL,
+                    data_json TEXT NOT NULL,
+                    updatedAt TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS clients (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    name TEXT NOT NULL,
+                    pib TEXT NOT NULL,
+                    address TEXT NOT NULL,
+                    email TEXT NOT NULL,
+                    phone TEXT,
+                    createdAt TEXT NOT NULL,
+                    data_json TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS invoices (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    invoiceNumber TEXT NOT NULL,
+                    clientId TEXT NOT NULL,
+                    issueDate TEXT NOT NULL,
+                    currency TEXT NOT NULL,
+                    totalAmount REAL NOT NULL,
+                    createdAt TEXT NOT NULL,
+                    data_json TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_invoices_invoiceNumber ON invoices(invoiceNumber);
+                CREATE INDEX IF NOT EXISTS idx_invoices_clientId ON invoices(clientId);
+                CREATE INDEX IF NOT EXISTS idx_clients_name ON clients(name);
+
+                PRAGMA user_version = 1;
+            "#,
+            kind: MigrationKind::Up,
+        },
+    ];
+
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_sql::Builder::default()
+                .add_migrations("sqlite:pausaler.db", migrations)
+                .build(),
+        )
+        .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![greet, export_invoice_pdf_to_downloads])
         .run(tauri::generate_context!())

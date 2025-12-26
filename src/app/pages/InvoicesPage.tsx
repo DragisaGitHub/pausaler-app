@@ -22,8 +22,9 @@ import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 
 import { Invoice } from '../types';
-import { clientService, settingsService } from '../services/storage';
 import { useInvoices } from '../hooks/useInvoices.ts';
+import { useClients } from '../hooks/useClients.ts';
+import { getStorage } from '../services/storageProvider';
 import {
     buildInvoicePdfPayload,
     exportInvoicePdfToDownloads,
@@ -32,6 +33,8 @@ import {
 import { useTranslation } from 'react-i18next';
 import { getNumberLocale, normalizeLanguage } from '../i18n';
 
+const storage = getStorage();
+
 const { RangePicker } = DatePicker;
 
 export function InvoicesPage() {
@@ -39,6 +42,7 @@ export function InvoicesPage() {
     const navigate = useNavigate();
 
     const { invoices, deleteInvoice } = useInvoices();
+    const { clients } = useClients();
 
     const [exportingId, setExportingId] = useState<string | null>(null);
 
@@ -48,8 +52,8 @@ export function InvoicesPage() {
         [dayjs.Dayjs | null, dayjs.Dayjs | null] | null
     >(null);
 
-    const handleDelete = (id: string) => {
-        const ok = deleteInvoice(id);
+    const handleDelete = async (id: string) => {
+        const ok = await deleteInvoice(id);
         if (ok) {
             message.success(t('invoices.deletedSuccess'));
         } else {
@@ -76,13 +80,13 @@ export function InvoicesPage() {
             return;
         }
 
-        const settings = settingsService.get();
-        if (!settings.companyName || !settings.pib || !settings.address || !settings.bankAccount) {
+        const settings = await storage.getSettings();
+        if (!settings.isConfigured || !settings.companyName || !settings.pib || !settings.address || !settings.bankAccount) {
             message.error(t('invoiceView.missingCompany'));
             return;
         }
 
-        const client = clientService.getAll().find((c) => c.id === invoice.clientId);
+        const client = await storage.getClientById(invoice.clientId);
 
         const payload = buildInvoicePdfPayload({ invoice, client, settings });
 
@@ -105,7 +109,6 @@ export function InvoicesPage() {
         }
     };
 
-    const clients = clientService.getAll();
     const clientOptions = clients.map((c) => ({
         label: c.name,
         value: c.id,
@@ -213,7 +216,7 @@ export function InvoicesPage() {
                     <Popconfirm
                         title={t('common.delete')}
                         description={t('invoices.deleteConfirm')}
-                        onConfirm={() => handleDelete(record.id)}
+                        onConfirm={() => void handleDelete(record.id)}
                         okText={t('common.yes')}
                         cancelText={t('common.no')}
                     >

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Settings } from '../types';
-import { settingsService } from '../services/storage';
+import { getStorage } from '../services/storageProvider';
 
 type UseSettingsResult = {
     settings: Settings | null;
@@ -13,13 +13,29 @@ export function useSettings(): UseSettingsResult {
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
-        setSettings(settingsService.get());
+        let cancelled = false;
+        const storage = getStorage();
+
+        setLoading(true);
+        void (async () => {
+            try {
+                const loaded = await storage.getSettings();
+                if (!cancelled) setSettings(loaded);
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
     }, []);
 
     const save = useCallback(async (next: Settings) => {
+        const storage = getStorage();
         setLoading(true);
         try {
-            const updated = settingsService.update(next);
+            const updated = await storage.updateSettings(next);
             setSettings(updated);
         } finally {
             setLoading(false);
