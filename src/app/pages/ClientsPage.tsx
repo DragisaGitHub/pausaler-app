@@ -35,8 +35,8 @@ export function ClientsPage() {
     setIsModalVisible(true);
   };
 
-  const handleDelete = (id: string) => {
-    const ok = deleteClient(id);
+  const handleDelete = async (id: string) => {
+    const ok = await deleteClient(id);
     if (ok) {
       message.success(t('clients.deleted'));
     } else {
@@ -44,16 +44,16 @@ export function ClientsPage() {
     }
   };
 
-  const handleSubmit = (values: Omit<Client, 'id' | 'createdAt'>) => {
+  const handleSubmit = async (values: Omit<Client, 'id' | 'createdAt'>) => {
     if (editingClient) {
-      const updated = updateClient(editingClient.id, values);
+      const updated = await updateClient(editingClient.id, values);
       if (updated) {
         message.success(t('clients.updated'));
       } else {
         message.error(t('clients.notFound'));
       }
     } else {
-      createClient(values);
+      await createClient(values);
       message.success(t('clients.created'));
     }
 
@@ -105,7 +105,7 @@ export function ClientsPage() {
             <Popconfirm
                 title={t('clients.deleteTitle')}
                 description={t('clients.deleteDesc')}
-                onConfirm={() => handleDelete(record.id)}
+              onConfirm={() => void handleDelete(record.id)}
                 okText={t('common.yes')}
                 cancelText={t('common.no')}
             >

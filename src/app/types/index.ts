@@ -31,6 +31,11 @@ export interface Invoice {
 }
 
 export interface Settings {
+  /**
+   * Explicit onboarding marker. When false (or missing), the app may require the user
+   * to complete initial setup before using the main flows.
+   */
+  isConfigured?: boolean;
   companyName: string;
   pib: string;
   address: string;

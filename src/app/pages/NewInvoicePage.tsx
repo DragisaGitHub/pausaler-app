@@ -23,9 +23,11 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import dayjs from 'dayjs';
 
 import { Invoice, InvoiceItem, Client, CURRENCY_VALUES } from '../types';
-import { invoiceService, clientService, settingsService } from '../services/storage';
+import { getStorage } from '../services/storageProvider';
 import { useTranslation } from 'react-i18next';
 import { getNumberLocale, normalizeLanguage } from '../i18n';
+
+const storage = getStorage();
 
 type LocationState =
   | { duplicate?: Invoice; duplicateId?: string }
@@ -63,66 +65,75 @@ export function NewInvoicePage() {
   const isEditMode = !!editId;
 
   useEffect(() => {
-    setClients(clientService.getAll());
+    let cancelled = false;
 
-    if (editId) {
-      const existing = invoiceService.getById(editId);
-      if (!existing) {
-        message.error(t('newInvoice.notFound'));
-        navigate('/');
+    void (async () => {
+      const loadedClients = await storage.getAllClients();
+      if (!cancelled) setClients(loadedClients);
+
+      if (editId) {
+        const existing = await storage.getInvoiceById(editId);
+        if (!existing) {
+          message.error(t('newInvoice.notFound'));
+          navigate('/');
+          return;
+        }
+
+        form.setFieldsValue({
+          clientId: existing.clientId,
+          issueDate: dayjs(existing.issueDate),
+          serviceDate: dayjs(existing.serviceDate),
+          currency: existing.currency,
+          notes: existing.notes,
+        });
+        if (!cancelled) setItems(existing.items);
         return;
       }
 
-      form.setFieldsValue({
-        clientId: existing.clientId,
-        issueDate: dayjs(existing.issueDate),
-        serviceDate: dayjs(existing.serviceDate),
-        currency: existing.currency,
-        notes: existing.notes,
-      });
-      setItems(existing.items);
-      return;
-    }
+      if (duplicateId) {
+        const existing = await storage.getInvoiceById(duplicateId);
+        if (!existing) {
+          message.error(t('newInvoice.notFound'));
+          navigate('/');
+          return;
+        }
 
-    if (duplicateId) {
-      const existing = invoiceService.getById(duplicateId);
-      if (!existing) {
-        message.error(t('newInvoice.notFound'));
-        navigate('/');
+        form.setFieldsValue({
+          clientId: existing.clientId,
+          issueDate: dayjs(),
+          serviceDate: dayjs(),
+          currency: existing.currency,
+          notes: existing.notes,
+        });
+        if (!cancelled) setItems(existing.items);
         return;
       }
 
+      if (state && 'duplicate' in state && state.duplicate) {
+        const d = state.duplicate;
+        form.setFieldsValue({
+          clientId: d.clientId,
+          issueDate: dayjs(),
+          serviceDate: dayjs(),
+          currency: d.currency,
+          notes: d.notes,
+        });
+        if (!cancelled) setItems(d.items);
+        return;
+      }
+
+      const settings = await storage.getSettings();
       form.setFieldsValue({
-        clientId: existing.clientId,
         issueDate: dayjs(),
         serviceDate: dayjs(),
-        currency: existing.currency,
-        notes: existing.notes,
+        currency: settings.defaultCurrency,
       });
-      setItems(existing.items);
-      return;
-    }
+      if (!cancelled) setItems([]);
+    })();
 
-    if (state && 'duplicate' in state && state.duplicate) {
-      const d = state.duplicate;
-      form.setFieldsValue({
-        clientId: d.clientId,
-        issueDate: dayjs(),
-        serviceDate: dayjs(),
-        currency: d.currency,
-        notes: d.notes,
-      });
-      setItems(d.items);
-      return;
-    }
-
-    const settings = settingsService.get();
-    form.setFieldsValue({
-      issueDate: dayjs(),
-      serviceDate: dayjs(),
-      currency: settings.defaultCurrency,
-    });
-    setItems([]);
+    return () => {
+      cancelled = true;
+    };
   }, [editId, duplicateId, state, form, navigate]);
 
   const handleAddItem = () => {
@@ -162,8 +173,8 @@ export function NewInvoicePage() {
     return { subtotal, total: subtotal };
   };
 
-  const handleAddClient = (values: Omit<Client, 'id' | 'createdAt'>) => {
-    const newClient = clientService.create(values);
+  const handleAddClient = async (values: Omit<Client, 'id' | 'createdAt'>) => {
+    const newClient = await storage.createClient(values);
     setClients((prev) => [...prev, newClient]);
     form.setFieldValue('clientId', newClient.id);
     setIsClientModalVisible(false);
@@ -171,65 +182,33 @@ export function NewInvoicePage() {
     message.success(t('clients.created'));
   };
 
-  const handleSave = (exportPDF = false) => {
-    form
-      .validateFields()
-      .then((values) => {
-        if (items.length === 0) {
-          message.error(t('newInvoice.needItem'));
-          return;
-        }
+  const handleSave = async (exportPDF = false) => {
+    try {
+      const values = await form.validateFields();
 
-        const hasInvalidItems = items.some(
-          (item) => !item.description || item.quantity <= 0 || item.unitPrice <= 0
-        );
-        if (hasInvalidItems) {
-          message.error(t('newInvoice.invalidItems'));
-          return;
-        }
+      if (items.length === 0) {
+        message.error(t('newInvoice.needItem'));
+        return;
+      }
 
-        const client = clients.find((c) => c.id === values.clientId);
-        if (!client) {
-          message.error(t('newInvoice.clientNotFound'));
-          return;
-        }
+      const hasInvalidItems = items.some(
+        (item) => !item.description || item.quantity <= 0 || item.unitPrice <= 0
+      );
+      if (hasInvalidItems) {
+        message.error(t('newInvoice.invalidItems'));
+        return;
+      }
 
-        const totals = calculateTotals();
+      const client = clients.find((c) => c.id === values.clientId);
+      if (!client) {
+        message.error(t('newInvoice.clientNotFound'));
+        return;
+      }
 
-        if (editId) {
-          const updated: Partial<Invoice> = {
-            clientId: values.clientId,
-            clientName: client.name,
-            issueDate: values.issueDate.format('YYYY-MM-DD'),
-            serviceDate: values.serviceDate.format('YYYY-MM-DD'),
-            currency: values.currency,
-            items,
-            subtotal: totals.subtotal,
-            total: totals.total,
-            notes: values.notes || '',
-          };
+      const totals = calculateTotals();
 
-          const saved = invoiceService.update(editId, updated);
-          if (!saved) {
-            message.error(t('newInvoice.notFound'));
-            navigate('/');
-            return;
-          }
-
-          message.success(t('newInvoice.updated'));
-
-          if (exportPDF) {
-            message.info(t('newInvoice.exportInDev'));
-          }
-
-          navigate(`/invoices/view/${editId}`);
-          return;
-        }
-
-        const invoiceNumber = settingsService.generateInvoiceNumber();
-
-        const invoice: Omit<Invoice, 'id' | 'createdAt'> = {
-          invoiceNumber,
+      if (editId) {
+        const updated: Partial<Invoice> = {
           clientId: values.clientId,
           clientName: client.name,
           issueDate: values.issueDate.format('YYYY-MM-DD'),
@@ -241,16 +220,49 @@ export function NewInvoicePage() {
           notes: values.notes || '',
         };
 
-        invoiceService.create(invoice);
-        message.success(t('newInvoice.created'));
+        const saved = await storage.updateInvoice(editId, updated);
+        if (!saved) {
+          message.error(t('newInvoice.notFound'));
+          navigate('/');
+          return;
+        }
+
+        message.success(t('newInvoice.updated'));
 
         if (exportPDF) {
           message.info(t('newInvoice.exportInDev'));
         }
 
-        navigate('/');
-      })
-      .catch(() => {});
+        navigate(`/invoices/view/${editId}`);
+        return;
+      }
+
+      const invoiceNumber = await storage.generateInvoiceNumber();
+
+      const invoice: Omit<Invoice, 'id' | 'createdAt'> = {
+        invoiceNumber,
+        clientId: values.clientId,
+        clientName: client.name,
+        issueDate: values.issueDate.format('YYYY-MM-DD'),
+        serviceDate: values.serviceDate.format('YYYY-MM-DD'),
+        currency: values.currency,
+        items,
+        subtotal: totals.subtotal,
+        total: totals.total,
+        notes: values.notes || '',
+      };
+
+      await storage.createInvoice(invoice);
+      message.success(t('newInvoice.created'));
+
+      if (exportPDF) {
+        message.info(t('newInvoice.exportInDev'));
+      }
+
+      navigate('/');
+    } catch {
+      // validation errors handled by antd
+    }
   };
 
   const totals = calculateTotals();
@@ -357,13 +369,13 @@ export function NewInvoicePage() {
           >
             {t('common.cancel')}
           </Button>
-          <Button icon={<SaveOutlined />} onClick={() => handleSave(false)}>
+          <Button icon={<SaveOutlined />} onClick={() => void handleSave(false)}>
             {t('common.save')}
           </Button>
           <Button
             type="primary"
             icon={<FilePdfOutlined />}
-            onClick={() => handleSave(true)}
+            onClick={() => void handleSave(true)}
           >
             {t('newInvoice.saveAndExport')}
           </Button>

@@ -1,40 +1,43 @@
 import { useCallback, useEffect, useState } from 'react';
-import {Invoice} from "../types";
-import {invoiceService} from "../services/storage.ts";
+import { Invoice } from '../types';
+import { getStorage } from '../services/storageProvider';
+
+const storage = getStorage();
 
 export const useInvoices = () => {
     const [invoices, setInvoices] = useState<Invoice[]>([]);
 
-    const refresh = useCallback(() => {
-        setInvoices(invoiceService.getAll());
+    const refresh = useCallback(async () => {
+        const next = await storage.getAllInvoices();
+        setInvoices(next);
     }, []);
 
     useEffect(() => {
-        refresh();
+        void refresh();
     }, [refresh]);
 
     const createInvoice = useCallback(
-        (data: Omit<Invoice, 'id' | 'createdAt'>) => {
-            const created = invoiceService.create(data);
-            refresh();
+        async (data: Omit<Invoice, 'id' | 'createdAt'>) => {
+            const created = await storage.createInvoice(data);
+            await refresh();
             return created;
         },
         [refresh]
     );
 
     const updateInvoice = useCallback(
-        (id: string, patch: Partial<Invoice>) => {
-            const updated = invoiceService.update(id, patch);
-            refresh();
+        async (id: string, patch: Partial<Invoice>) => {
+            const updated = await storage.updateInvoice(id, patch);
+            await refresh();
             return updated;
         },
         [refresh]
     );
 
     const deleteInvoice = useCallback(
-        (id: string) => {
-            const ok = invoiceService.delete(id);
-            refresh();
+        async (id: string) => {
+            const ok = await storage.deleteInvoice(id);
+            await refresh();
             return ok;
         },
         [refresh]

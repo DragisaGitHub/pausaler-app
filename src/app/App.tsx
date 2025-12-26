@@ -8,30 +8,43 @@ import { NewInvoicePage } from './pages/NewInvoicePage';
 import { InvoiceViewPage } from './pages/InvoiceViewPage';
 import { ClientsPage } from './pages/ClientsPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import i18n, { normalizeLanguage } from './i18n';
-import { settingsService } from './services/storage';
+import { getStorage } from './services/storageProvider';
+import { SetupCompanyPage } from './pages/SetupCompanyPage';
+
+const storage = getStorage();
 
 export default function App() {
   const { i18n: i18nFromHook } = useTranslation();
+  const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
 
   useEffect(() => {
-    const settings = settingsService.get();
-    const lang = normalizeLanguage(settings.language);
-    if (i18n.language !== lang) {
-      void i18n.changeLanguage(lang);
-    }
+    void (async () => {
+      const [settings, clients, invoices] = await Promise.all([
+        storage.getSettings(),
+        storage.getAllClients(),
+        storage.getAllInvoices(),
+      ]);
+
+      const shouldSetup = !settings.isConfigured && clients.length === 0 && invoices.length === 0;
+      setNeedsSetup(shouldSetup);
+
+      const lang = normalizeLanguage(settings.language);
+      if (i18n.language !== lang) {
+        void i18n.changeLanguage(lang);
+      }
+    })();
   }, []);
 
   useEffect(() => {
-    if (import.meta.env.VITE_DEMO_SEED === 'true') {
-      void import('./services/seedData');
-    }
   }, []);
 
   const appLang = normalizeLanguage(i18nFromHook.language);
   const antdLocale = appLang === 'en' ? enUS : srRS;
+
+  if (needsSetup === null) return null;
 
   return (
     <ConfigProvider
@@ -46,7 +59,17 @@ export default function App() {
     >
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<MainLayout />}>
+          <Route path="/" element={<MainLayout needsSetup={needsSetup} />}>
+            <Route
+              path="setup"
+              element={
+                <SetupCompanyPage
+                  onCompleted={() => {
+                    setNeedsSetup(false);
+                  }}
+                />
+              }
+            />
             <Route index element={<InvoicesPage />} />
             <Route path="invoices/new" element={<NewInvoicePage />} />
             <Route path="invoices/view/:id" element={<InvoiceViewPage />} />

@@ -110,9 +110,3 @@ export const seedDemoData = () => {
 
   console.log('Demo data seeded successfully!');
 };
-
-const ENABLE_DEMO_SEED = import.meta.env.VITE_DEMO_SEED === 'true';
-
-if (ENABLE_DEMO_SEED) {
-  seedDemoData();
-}

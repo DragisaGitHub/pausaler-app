@@ -34,11 +34,12 @@ export const storage = {
 };
 
 // Default settings
-const defaultSettings: Settings = {
-  companyName: 'Moja Firma DOO',
-  pib: '123456789',
-  address: 'Bulevar kralja Aleksandra 1, Beograd',
-  bankAccount: '160-5100000000000-00',
+export const defaultSettings: Settings = {
+  isConfigured: false,
+  companyName: '',
+  pib: '',
+  address: '',
+  bankAccount: '',
   logoUrl: '',
   invoicePrefix: 'INV',
   nextInvoiceNumber: 1,
@@ -46,13 +47,13 @@ const defaultSettings: Settings = {
   language: 'sr',
 };
 
-// Initialize default settings if not exists
-export const initializeSettings = (): void => {
-  const settings = storage.get<Settings>(STORAGE_KEYS.SETTINGS);
-  if (!settings) {
-    storage.set(STORAGE_KEYS.SETTINGS, defaultSettings);
-  }
-};
+function inferIsConfigured(settings: Partial<Settings> | null | undefined): boolean {
+  if (!settings) return false;
+  if (typeof settings.isConfigured === 'boolean') return settings.isConfigured;
+  const companyName = String(settings.companyName ?? '').trim();
+  const pib = String(settings.pib ?? '').trim();
+  return companyName.length > 0 && pib.length > 0;
+}
 
 // Client services
 export const clientService = {
@@ -141,11 +142,14 @@ export const invoiceService = {
 export const settingsService = {
   get: (): Settings => {
     const saved = storage.get<Partial<Settings>>(STORAGE_KEYS.SETTINGS) || {};
-    return { ...defaultSettings, ...saved } as Settings;
+    const merged = { ...defaultSettings, ...saved } as Settings;
+    merged.isConfigured = inferIsConfigured(merged);
+    return merged;
   },
   update: (settings: Partial<Settings>): Settings => {
     const current = settingsService.get();
-    const updated = { ...current, ...settings };
+    const updated = { ...current, ...settings } as Settings;
+    updated.isConfigured = inferIsConfigured(updated);
     storage.set(STORAGE_KEYS.SETTINGS, updated);
     return updated;
   },
@@ -157,8 +161,5 @@ export const settingsService = {
 
 export const resetInvoicingStorage = (): void => {
   Object.values(STORAGE_KEYS).forEach((k) => localStorage.removeItem(k));
-  initializeSettings();
 };
 
-// Initialize on load
-initializeSettings();
