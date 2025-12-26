@@ -8,7 +8,6 @@ import { NewInvoicePage } from './pages/NewInvoicePage';
 import { InvoiceViewPage } from './pages/InvoiceViewPage';
 import { ClientsPage } from './pages/ClientsPage';
 import { SettingsPage } from './pages/SettingsPage';
-import './services/seedData'; // seed (only if enabled)
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import i18n, { normalizeLanguage } from './i18n';
@@ -22,6 +21,12 @@ export default function App() {
     const lang = normalizeLanguage(settings.language);
     if (i18n.language !== lang) {
       void i18n.changeLanguage(lang);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (import.meta.env.VITE_DEMO_SEED === 'true') {
+      void import('./services/seedData');
     }
   }, []);
 
