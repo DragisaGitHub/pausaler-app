@@ -22,7 +22,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 
-import { Invoice } from '../types';
+import { Invoice, INVOICE_STATUS_VALUES } from '../types';
 import { useInvoices } from '../hooks/useInvoices.ts';
 import { useClients } from '../hooks/useClients.ts';
 import { isInvoiceOverdue } from '../services/invoiceOverdue';
@@ -140,8 +140,8 @@ export function InvoicesPage() {
             !dateRange ||
             !dateRange[0] ||
             !dateRange[1] ||
-            (dayjs(invoice.issueDate).isAfter(dateRange[0].startOf('day')) &&
-                dayjs(invoice.issueDate).isBefore(dateRange[1].endOf('day')));
+            (!dayjs(invoice.issueDate).isBefore(dateRange[0].startOf('day')) &&
+                !dayjs(invoice.issueDate).isAfter(dateRange[1].endOf('day')));
 
         return matchesSearch && matchesClient && matchesStatus && matchesDate;
     });
@@ -301,7 +301,7 @@ export function InvoicesPage() {
                         style={{ width: 180 }}
                         value={selectedStatus}
                         onChange={setSelectedStatus}
-                        options={['DRAFT', 'SENT', 'PAID', 'CANCELLED', 'OVERDUE'].map((s) => ({
+                        options={[...INVOICE_STATUS_VALUES, 'OVERDUE'].map((s) => ({
                             label: t(`invoiceStatus.${s}`),
                             value: s,
                         }))}

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button, Card, Descriptions, Table, Divider, Space, message, Select, DatePicker, Tag } from 'antd';
 import { ArrowLeftOutlined, EditOutlined, FilePdfOutlined } from '@ant-design/icons';
-import { Client, Invoice, InvoiceItem, Settings } from '../types';
+import { Client, Invoice, InvoiceItem, Settings, INVOICE_STATUS_VALUES } from '../types';
 import { getStorage } from '../services/storageProvider';
 import dayjs from 'dayjs';
 import { getInvoiceOverdueDays, isInvoiceOverdue } from '../services/invoiceOverdue';
@@ -254,7 +254,7 @@ export function InvoiceViewPage() {
                     value={invoice.status}
                     onChange={(value) => void handleUpdateInvoice({ status: value as Invoice['status'] })}
                     disabled={updatingMeta}
-                    options={['DRAFT', 'SENT', 'PAID', 'CANCELLED'].map((s) => ({
+                    options={INVOICE_STATUS_VALUES.map((s) => ({
                       value: s,
                       label: t(`invoiceStatus.${s}`),
                     }))}
