@@ -136,6 +136,7 @@ export function InvoicesPage() {
                 ? isInvoiceOverdue(invoice)
                 : (invoice.status ?? 'DRAFT') === selectedStatus);
 
+        // Date range filter is inclusive of boundary dates
         const matchesDate =
             !dateRange ||
             !dateRange[0] ||
