@@ -80,8 +80,7 @@ export function createSqliteStorageAdapter(): StorageAdapter {
     },
 
     updateInvoice: async (id: string, patch: Partial<Invoice>): Promise<Invoice | null> => {
-      const { paidAt: _paidAtIgnored, ...safePatch } = patch as Invoice;
-      const res = await invokeLogged<Invoice | null>('updateInvoice', 'update_invoice', { id, patch: safePatch });
+      const res = await invokeLogged<Invoice | null>('updateInvoice', 'update_invoice', { id, patch });
       return res ?? null;
     },
 
