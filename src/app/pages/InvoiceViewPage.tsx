@@ -5,6 +5,7 @@ import { ArrowLeftOutlined, EditOutlined, FilePdfOutlined } from '@ant-design/ic
 import { Client, Invoice, InvoiceItem, Settings } from '../types';
 import { getStorage } from '../services/storageProvider';
 import dayjs from 'dayjs';
+import { getInvoiceOverdueDays, isInvoiceOverdue } from '../services/invoiceOverdue';
 import {
   buildInvoicePdfPayload,
   exportInvoicePdfToDownloads,
@@ -107,6 +108,9 @@ export function InvoiceViewPage() {
       setUpdatingMeta(false);
     }
   };
+
+  const isOverdue = isInvoiceOverdue(invoice);
+  const overdueDays = getInvoiceOverdueDays(invoice);
 
   const columns = [
     {
@@ -239,6 +243,11 @@ export function InvoiceViewPage() {
                   >
                     {t(`invoiceStatus.${invoice.status}`)}
                   </Tag>
+                  {isOverdue && (
+                    <Tag color="volcano">
+                      {overdueDays ? t('invoiceStatus.OVERDUE_DAYS', { days: overdueDays }) : t('invoiceStatus.OVERDUE')}
+                    </Tag>
+                  )}
                   <Select
                     size="small"
                     style={{ width: 160 }}

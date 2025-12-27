@@ -25,6 +25,7 @@ import dayjs from 'dayjs';
 import { Invoice } from '../types';
 import { useInvoices } from '../hooks/useInvoices.ts';
 import { useClients } from '../hooks/useClients.ts';
+import { isInvoiceOverdue } from '../services/invoiceOverdue';
 import { getStorage } from '../services/storageProvider';
 import {
     buildInvoicePdfPayload,
@@ -38,6 +39,8 @@ const storage = getStorage();
 
 const { RangePicker } = DatePicker;
 
+type InvoiceStatusFilter = Invoice['status'] | 'OVERDUE';
+
 export function InvoicesPage() {
     const { t, i18n } = useTranslation();
     const navigate = useNavigate();
@@ -49,7 +52,7 @@ export function InvoicesPage() {
 
     const [searchText, setSearchText] = useState('');
     const [selectedClient, setSelectedClient] = useState<string | undefined>();
-    const [selectedStatus, setSelectedStatus] = useState<Invoice['status'] | undefined>();
+    const [selectedStatus, setSelectedStatus] = useState<InvoiceStatusFilter | undefined>();
     const [dateRange, setDateRange] = useState<
         [dayjs.Dayjs | null, dayjs.Dayjs | null] | null
     >(null);
@@ -127,7 +130,11 @@ export function InvoicesPage() {
 
         const matchesClient = !selectedClient || invoice.clientId === selectedClient;
 
-        const matchesStatus = !selectedStatus || (invoice.status ?? 'DRAFT') === selectedStatus;
+        const matchesStatus =
+            !selectedStatus ||
+            (selectedStatus === 'OVERDUE'
+                ? isInvoiceOverdue(invoice)
+                : (invoice.status ?? 'DRAFT') === selectedStatus);
 
         const matchesDate =
             !dateRange ||
@@ -155,8 +162,8 @@ export function InvoicesPage() {
             title: t('invoices.status'),
             dataIndex: 'status',
             key: 'status',
-            width: 130,
-            render: (status: Invoice['status']) => {
+            width: 220,
+            render: (status: Invoice['status'], record: Invoice) => {
                 const color =
                     status === 'PAID'
                         ? 'green'
@@ -165,7 +172,13 @@ export function InvoicesPage() {
                             : status === 'CANCELLED'
                                 ? 'red'
                                 : 'default';
-                return <Tag color={color}>{t(`invoiceStatus.${status}`)}</Tag>;
+                const overdue = isInvoiceOverdue(record);
+                return (
+                    <Space size="small">
+                        <Tag color={color}>{t(`invoiceStatus.${status}`)}</Tag>
+                        {overdue && <Tag color="volcano">{t('invoiceStatus.OVERDUE')}</Tag>}
+                    </Space>
+                );
             },
         },
         {
@@ -288,7 +301,7 @@ export function InvoicesPage() {
                         style={{ width: 180 }}
                         value={selectedStatus}
                         onChange={setSelectedStatus}
-                        options={['DRAFT', 'SENT', 'PAID', 'CANCELLED'].map((s) => ({
+                        options={['DRAFT', 'SENT', 'PAID', 'CANCELLED', 'OVERDUE'].map((s) => ({
                             label: t(`invoiceStatus.${s}`),
                             value: s,
                         }))}

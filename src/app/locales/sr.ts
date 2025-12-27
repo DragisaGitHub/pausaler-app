@@ -51,6 +51,8 @@ export const sr = {
     SENT: 'Poslata',
     PAID: 'Plaćena',
     CANCELLED: 'Stornirana',
+    OVERDUE: 'Kasni',
+    OVERDUE_DAYS: 'Kasni {{days}} dana',
   },
   invoiceView: {
     back: 'Nazad na listu',

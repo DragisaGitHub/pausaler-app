@@ -51,6 +51,8 @@ export const en = {
     SENT: 'Sent',
     PAID: 'Paid',
     CANCELLED: 'Cancelled',
+    OVERDUE: 'Overdue',
+    OVERDUE_DAYS: 'Overdue by {{days}} days',
   },
   invoiceView: {
     back: 'Back to list',
