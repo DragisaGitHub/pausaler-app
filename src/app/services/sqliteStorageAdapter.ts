@@ -86,5 +86,14 @@ export function createSqliteStorageAdapter(): StorageAdapter {
 
     deleteInvoice: async (id: string): Promise<boolean> =>
       invokeLogged<boolean>('deleteInvoice', 'delete_invoice', { id }),
+
+    // Email
+    sendInvoiceEmail: async (input: {
+      invoiceId: string;
+      to: string;
+      subject: string;
+      body?: string;
+      includePdf: boolean;
+    }): Promise<boolean> => invokeLogged<boolean>('sendInvoiceEmail', 'send_invoice_email', { input }),
   };
 }

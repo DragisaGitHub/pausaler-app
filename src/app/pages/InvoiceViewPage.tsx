@@ -1,11 +1,28 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Button, Card, Descriptions, Table, Divider, Space, message, Select, DatePicker, Tag } from 'antd';
-import { ArrowLeftOutlined, EditOutlined, FilePdfOutlined } from '@ant-design/icons';
+import {
+  Button,
+  Card,
+  Descriptions,
+  Table,
+  Divider,
+  Space,
+  message,
+  Select,
+  DatePicker,
+  Tag,
+  Modal,
+  Form,
+  Input,
+  Checkbox,
+  Tooltip,
+} from 'antd';
+import { ArrowLeftOutlined, EditOutlined, FilePdfOutlined, MailOutlined } from '@ant-design/icons';
 import { Client, Invoice, InvoiceItem, Settings, INVOICE_STATUS_VALUES } from '../types';
 import { getStorage } from '../services/storageProvider';
 import dayjs from 'dayjs';
 import { getInvoiceOverdueDays, isInvoiceOverdue } from '../services/invoiceOverdue';
+import { isSmtpConfigured } from '../services/smtp';
 import {
   buildInvoicePdfPayload,
   exportInvoicePdfToDownloads,
@@ -26,6 +43,10 @@ export function InvoiceViewPage() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [exporting, setExporting] = useState(false);
   const [updatingMeta, setUpdatingMeta] = useState(false);
+
+  const [sendEmailOpen, setSendEmailOpen] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [sendEmailForm] = Form.useForm<{ to: string; subject: string; body?: string; includePdf: boolean }>();
 
   useEffect(() => {
     if (!id) return;
@@ -112,6 +133,65 @@ export function InvoiceViewPage() {
   const isOverdue = isInvoiceOverdue(invoice);
   const overdueDays = getInvoiceOverdueDays(invoice);
 
+  const smtpConfigured = isSmtpConfigured(settings);
+  const clientEmail = (client?.email ?? '').trim();
+
+  const sendEmailDisabledReason = !smtpConfigured
+    ? t('invoiceEmail.smtpNotConfigured')
+    : !clientEmail
+      ? t('invoiceEmail.missingClientEmail')
+      : '';
+
+  const openSendEmail = () => {
+    sendEmailForm.setFieldsValue({
+      to: clientEmail,
+      subject: t('invoiceEmail.defaultSubject', { number: invoice.invoiceNumber }),
+      body: '',
+      includePdf: true,
+    });
+    setSendEmailOpen(true);
+  };
+
+  const handleSendEmail = async () => {
+    if (sendingEmail) return;
+
+    try {
+      const values = await sendEmailForm.validateFields();
+
+      if (values.includePdf) {
+        if (!invoice.items?.length) {
+          message.error(t('invoiceView.missingItems'));
+          return;
+        }
+
+        if (!settings.isConfigured || !settings.companyName || !settings.pib || !settings.address || !settings.bankAccount) {
+          message.error(t('invoiceView.missingCompany'));
+          return;
+        }
+      }
+
+      setSendingEmail(true);
+      await storage.sendInvoiceEmail({
+        invoiceId: invoice.id,
+        to: values.to,
+        subject: values.subject,
+        body: values.body,
+        includePdf: values.includePdf,
+      });
+
+      message.success(t('invoiceEmail.sent'));
+      setSendEmailOpen(false);
+    } catch (e: unknown) {
+      // AntD form validation errors throw; ignore those.
+      if (typeof e === 'object' && e !== null && 'errorFields' in e) return;
+
+      const msg = typeof e === 'string' ? e : t('invoiceEmail.sendError');
+      message.error(msg);
+    } finally {
+      setSendingEmail(false);
+    }
+  };
+
   const columns = [
     {
       title: '#',
@@ -158,6 +238,17 @@ export function InvoiceViewPage() {
           {t('invoiceView.back')}
         </Button>
         <Space>
+          <Tooltip title={sendEmailDisabledReason || undefined}>
+            <span>
+              <Button
+                icon={<MailOutlined />}
+                onClick={openSendEmail}
+                disabled={!smtpConfigured || !clientEmail}
+              >
+                {t('invoiceView.sendEmail')}
+              </Button>
+            </span>
+          </Tooltip>
           <Button
             icon={<EditOutlined />}
             onClick={() => navigate('/invoices/new', { state: { editId: invoice.id } })}
@@ -322,6 +413,52 @@ export function InvoiceViewPage() {
           {t('invoiceView.createdAt')}: {dayjs(invoice.createdAt).format('DD.MM.YYYY HH:mm')}
         </div>
       </Card>
+
+      <Modal
+        title={t('invoiceEmail.title')}
+        open={sendEmailOpen}
+        onCancel={() => setSendEmailOpen(false)}
+        destroyOnClose
+        footer={
+          <Space>
+            <Button onClick={() => setSendEmailOpen(false)} disabled={sendingEmail}>
+              {t('invoiceEmail.cancel')}
+            </Button>
+            <Button type="primary" onClick={handleSendEmail} loading={sendingEmail}>
+              {t('invoiceEmail.send')}
+            </Button>
+          </Space>
+        }
+      >
+        <Form form={sendEmailForm} layout="vertical">
+          <Form.Item
+            name="to"
+            label={t('invoiceEmail.to')}
+            rules={[
+              { required: true, message: t('invoiceEmail.toReq') },
+              { type: 'email', message: t('invoiceEmail.toReq') },
+            ]}
+          >
+            <Input autoComplete="email" />
+          </Form.Item>
+
+          <Form.Item
+            name="subject"
+            label={t('invoiceEmail.subject')}
+            rules={[{ required: true, message: t('invoiceEmail.subjectReq') }]}
+          >
+            <Input />
+          </Form.Item>
+
+          <Form.Item name="body" label={t('invoiceEmail.body')}>
+            <Input.TextArea rows={4} />
+          </Form.Item>
+
+          <Form.Item name="includePdf" valuePropName="checked">
+            <Checkbox>{t('invoiceEmail.includePdf')}</Checkbox>
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 }

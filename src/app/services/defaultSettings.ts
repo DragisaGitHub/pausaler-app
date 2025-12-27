@@ -11,4 +11,10 @@ export const defaultSettings: Settings = {
   nextInvoiceNumber: 1,
   defaultCurrency: 'RSD',
   language: 'sr',
+  smtpHost: '',
+  smtpPort: 587,
+  smtpUser: '',
+  smtpPassword: '',
+  smtpFrom: '',
+  smtpUseTls: true,
 };

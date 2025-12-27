@@ -27,4 +27,6 @@ base64 = "0.22"
 rusqlite = { version = "0.32", features = ["bundled"] }
 time = { version = "0.3", features = ["formatting"] }
 uuid = { version = "1", features = ["v4"] }
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "rustls-tls"] }
+mime = "0.3"
 
