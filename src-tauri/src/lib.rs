@@ -344,6 +344,30 @@ pub struct InvoiceItem {
     pub total: f64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum InvoiceStatus {
+    Draft,
+    Sent,
+    Paid,
+    Cancelled,
+}
+
+impl InvoiceStatus {
+    fn as_str(&self) -> &'static str {
+        match self {
+            InvoiceStatus::Draft => "DRAFT",
+            InvoiceStatus::Sent => "SENT",
+            InvoiceStatus::Paid => "PAID",
+            InvoiceStatus::Cancelled => "CANCELLED",
+        }
+    }
+}
+
+fn default_invoice_status() -> InvoiceStatus {
+    InvoiceStatus::Draft
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Invoice {
@@ -353,6 +377,12 @@ pub struct Invoice {
     pub client_name: String,
     pub issue_date: String,
     pub service_date: String,
+    #[serde(default = "default_invoice_status")]
+    pub status: InvoiceStatus,
+    #[serde(default)]
+    pub due_date: Option<String>,
+    #[serde(default)]
+    pub paid_at: Option<String>,
     pub currency: String,
     pub items: Vec<InvoiceItem>,
     pub subtotal: f64,
@@ -368,6 +398,10 @@ pub struct NewInvoice {
     pub client_name: String,
     pub issue_date: String,
     pub service_date: String,
+    #[serde(default)]
+    pub status: Option<InvoiceStatus>,
+    #[serde(default)]
+    pub due_date: Option<String>,
     pub currency: String,
     pub items: Vec<InvoiceItem>,
     pub subtotal: f64,
@@ -383,6 +417,8 @@ pub struct InvoicePatch {
     pub client_name: Option<String>,
     pub issue_date: Option<String>,
     pub service_date: Option<String>,
+    pub status: Option<InvoiceStatus>,
+    pub due_date: Option<Option<String>>,
     pub currency: Option<String>,
     pub items: Option<Vec<InvoiceItem>>,
     pub subtotal: Option<f64>,
@@ -396,6 +432,11 @@ fn now_iso() -> String {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+}
+
+fn today_ymd() -> String {
+    let d = OffsetDateTime::now_utc().date();
+    format!("{:04}-{:02}-{:02}", d.year(), u8::from(d.month()), d.day())
 }
 
 fn default_settings() -> Settings {
@@ -513,6 +554,9 @@ fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
             invoiceNumber TEXT NOT NULL,
             clientId TEXT NOT NULL,
             issueDate TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'DRAFT',
+            dueDate TEXT,
+            paidAt TEXT,
             currency TEXT NOT NULL,
             totalAmount REAL NOT NULL,
             createdAt TEXT NOT NULL,
@@ -522,10 +566,35 @@ fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
         CREATE INDEX IF NOT EXISTS idx_invoices_invoiceNumber ON invoices(invoiceNumber);
         CREATE INDEX IF NOT EXISTS idx_invoices_clientId ON invoices(clientId);
         CREATE INDEX IF NOT EXISTS idx_clients_name ON clients(name);
-
-        PRAGMA user_version = 2;
         "#,
     )?;
+    Ok(())
+}
+
+fn apply_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let mut v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+
+    // Legacy baseline version was 2.
+    if v > 0 && v < 2 {
+        conn.execute_batch("PRAGMA user_version = 2;")?;
+        v = 2;
+    }
+
+    // v=0 typically means a fresh DB (init_schema created the latest tables).
+    if v == 0 {
+        conn.execute_batch("PRAGMA user_version = 3;")?;
+        return Ok(());
+    }
+
+    if v < 3 {
+        conn.execute_batch(
+            "ALTER TABLE invoices ADD COLUMN status TEXT NOT NULL DEFAULT 'DRAFT';\n\
+             ALTER TABLE invoices ADD COLUMN dueDate TEXT;\n\
+             ALTER TABLE invoices ADD COLUMN paidAt TEXT;\n\
+             PRAGMA user_version = 3;\n",
+        )?;
+    }
+
     Ok(())
 }
 
@@ -587,6 +656,7 @@ impl DbState {
         let conn = Connection::open(path).map_err(|e| e.to_string())?;
         configure_sqlite(&conn).map_err(|e| e.to_string())?;
         init_schema(&conn).map_err(|e| e.to_string())?;
+        apply_migrations(&conn).map_err(|e| e.to_string())?;
         ensure_settings_row(&conn).map_err(|e| e.to_string())?;
 
         Ok(Self {
@@ -952,6 +1022,14 @@ async fn create_invoice(state: tauri::State<'_, DbState>, input: NewInvoice) -> 
             )?;
 
             let invoice_number = format_invoice_number(&prefix, next_num);
+
+            let status = input.status.unwrap_or(InvoiceStatus::Draft);
+            let paid_at = if status == InvoiceStatus::Paid {
+                Some(today_ymd())
+            } else {
+                None
+            };
+
             let created = Invoice {
                 id: Uuid::new_v4().to_string(),
                 invoice_number: invoice_number,
@@ -959,6 +1037,9 @@ async fn create_invoice(state: tauri::State<'_, DbState>, input: NewInvoice) -> 
                 client_name: input.client_name,
                 issue_date: input.issue_date,
                 service_date: input.service_date,
+                status,
+                due_date: input.due_date,
+                paid_at,
                 currency: input.currency,
                 items: input.items,
                 subtotal: input.subtotal,
@@ -970,13 +1051,16 @@ async fn create_invoice(state: tauri::State<'_, DbState>, input: NewInvoice) -> 
             let json = serde_json::to_string(&created).unwrap_or_else(|_| "{}".to_string());
             tx.execute(
                 r#"INSERT INTO invoices (
-                    id, invoiceNumber, clientId, issueDate, currency, totalAmount, createdAt, data_json
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"#,
+                    id, invoiceNumber, clientId, issueDate, status, dueDate, paidAt, currency, totalAmount, createdAt, data_json
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
                 params![
                     created.id,
                     created.invoice_number,
                     created.client_id,
                     created.issue_date,
+                    created.status.as_str(),
+                    created.due_date,
+                    created.paid_at,
                     created.currency,
                     created.total,
                     created.created_at,
@@ -1031,6 +1115,12 @@ async fn update_invoice(
             if let Some(v) = patch.service_date {
                 existing.service_date = v;
             }
+            if let Some(v) = patch.status {
+                existing.status = v;
+            }
+            if let Some(v) = patch.due_date {
+                existing.due_date = v;
+            }
             if let Some(v) = patch.currency {
                 existing.currency = v;
             }
@@ -1047,14 +1137,26 @@ async fn update_invoice(
                 existing.notes = v;
             }
 
+            // Enforce PAID <-> paidAt invariant.
+            if existing.status == InvoiceStatus::Paid {
+                if existing.paid_at.is_none() {
+                    existing.paid_at = Some(today_ymd());
+                }
+            } else {
+                existing.paid_at = None;
+            }
+
             let json2 = serde_json::to_string(&existing).unwrap_or_else(|_| "{}".to_string());
             conn.execute(
-                r#"UPDATE invoices SET invoiceNumber=?2, clientId=?3, issueDate=?4, currency=?5, totalAmount=?6, data_json=?7 WHERE id=?1"#,
+                r#"UPDATE invoices SET invoiceNumber=?2, clientId=?3, issueDate=?4, status=?5, dueDate=?6, paidAt=?7, currency=?8, totalAmount=?9, data_json=?10 WHERE id=?1"#,
                 params![
                     id,
                     existing.invoice_number,
                     existing.client_id,
                     existing.issue_date,
+                    existing.status.as_str(),
+                    existing.due_date,
+                    existing.paid_at,
                     existing.currency,
                     existing.total,
                     json2,

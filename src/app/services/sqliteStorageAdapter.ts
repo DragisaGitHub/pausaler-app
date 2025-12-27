@@ -8,6 +8,8 @@ type NewInvoice = {
   clientName: string;
   issueDate: string;
   serviceDate: string;
+  status?: Invoice['status'];
+  dueDate?: Invoice['dueDate'];
   currency: string;
   items: Invoice['items'];
   subtotal: number;
@@ -72,7 +74,7 @@ export function createSqliteStorageAdapter(): StorageAdapter {
     createInvoice: async (data: Omit<Invoice, 'id' | 'createdAt'>): Promise<Invoice> => {
       // Invoice number is generated atomically on the Rust side inside a single transaction.
       // We ignore any invoiceNumber coming from the UI.
-      const { invoiceNumber: _ignored, ...rest } = data;
+      const { invoiceNumber: _ignored, paidAt: _paidAtIgnored, ...rest } = data as Invoice;
       const input = rest as unknown as NewInvoice;
       return invokeLogged<Invoice>('createInvoice', 'create_invoice', { input });
     },

@@ -9,6 +9,7 @@ import {
     message,
     Empty,
     Popconfirm,
+    Tag,
 } from 'antd';
 import {
     PlusOutlined,
@@ -21,9 +22,10 @@ import {
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 
-import { Invoice } from '../types';
+import { Invoice, INVOICE_STATUS_VALUES } from '../types';
 import { useInvoices } from '../hooks/useInvoices.ts';
 import { useClients } from '../hooks/useClients.ts';
+import { isInvoiceOverdue } from '../services/invoiceOverdue';
 import { getStorage } from '../services/storageProvider';
 import {
     buildInvoicePdfPayload,
@@ -37,6 +39,8 @@ const storage = getStorage();
 
 const { RangePicker } = DatePicker;
 
+type InvoiceStatusFilter = Invoice['status'] | 'OVERDUE';
+
 export function InvoicesPage() {
     const { t, i18n } = useTranslation();
     const navigate = useNavigate();
@@ -48,6 +52,7 @@ export function InvoicesPage() {
 
     const [searchText, setSearchText] = useState('');
     const [selectedClient, setSelectedClient] = useState<string | undefined>();
+    const [selectedStatus, setSelectedStatus] = useState<InvoiceStatusFilter | undefined>();
     const [dateRange, setDateRange] = useState<
         [dayjs.Dayjs | null, dayjs.Dayjs | null] | null
     >(null);
@@ -67,6 +72,9 @@ export function InvoicesPage() {
             invoiceNumber: '',
             issueDate: dayjs().format('YYYY-MM-DD'),
             serviceDate: dayjs().format('YYYY-MM-DD'),
+            status: 'DRAFT',
+            dueDate: null,
+            paidAt: null,
         };
 
         navigate('/invoices/new', { state: { duplicate: duplicated } });
@@ -122,14 +130,21 @@ export function InvoicesPage() {
 
         const matchesClient = !selectedClient || invoice.clientId === selectedClient;
 
+        const matchesStatus =
+            !selectedStatus ||
+            (selectedStatus === 'OVERDUE'
+                ? isInvoiceOverdue(invoice)
+                : (invoice.status ?? 'DRAFT') === selectedStatus);
+
+        // Date range filter is inclusive of boundary dates
         const matchesDate =
             !dateRange ||
             !dateRange[0] ||
             !dateRange[1] ||
-            (dayjs(invoice.issueDate).isAfter(dateRange[0].startOf('day')) &&
-                dayjs(invoice.issueDate).isBefore(dateRange[1].endOf('day')));
+            (!dayjs(invoice.issueDate).isBefore(dateRange[0].startOf('day')) &&
+                !dayjs(invoice.issueDate).isAfter(dateRange[1].endOf('day')));
 
-        return matchesSearch && matchesClient && matchesDate;
+        return matchesSearch && matchesClient && matchesStatus && matchesDate;
     });
 
     const sortedInvoices = [...filteredInvoices].sort(
@@ -143,6 +158,29 @@ export function InvoicesPage() {
             key: 'invoiceNumber',
             width: 150,
             render: (text: string) => <strong>{text}</strong>,
+        },
+        {
+            title: t('invoices.status'),
+            dataIndex: 'status',
+            key: 'status',
+            width: 220,
+            render: (status: Invoice['status'], record: Invoice) => {
+                const color =
+                    status === 'PAID'
+                        ? 'green'
+                        : status === 'SENT'
+                            ? 'blue'
+                            : status === 'CANCELLED'
+                                ? 'red'
+                                : 'default';
+                const overdue = isInvoiceOverdue(record);
+                return (
+                    <Space size="small">
+                        <Tag color={color}>{t(`invoiceStatus.${status}`)}</Tag>
+                        {overdue && <Tag color="volcano">{t('invoiceStatus.OVERDUE')}</Tag>}
+                    </Space>
+                );
+            },
         },
         {
             title: t('invoices.client'),
@@ -257,6 +295,17 @@ export function InvoicesPage() {
                         style={{ width: 300 }}
                         value={searchText}
                         onChange={(e) => setSearchText(e.target.value)}
+                        allowClear
+                    />
+                    <Select
+                        placeholder={t('invoices.filterStatus')}
+                        style={{ width: 180 }}
+                        value={selectedStatus}
+                        onChange={setSelectedStatus}
+                        options={[...INVOICE_STATUS_VALUES, 'OVERDUE'].map((s) => ({
+                            label: t(`invoiceStatus.${s}`),
+                            value: s,
+                        }))}
                         allowClear
                     />
                     <Select

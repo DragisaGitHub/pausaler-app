@@ -15,6 +15,9 @@ export interface InvoiceItem {
   total: number;
 }
 
+export const INVOICE_STATUS_VALUES = ['DRAFT', 'SENT', 'PAID', 'CANCELLED'] as const;
+export type InvoiceStatus = (typeof INVOICE_STATUS_VALUES)[number];
+
 export interface Invoice {
   id: string;
   invoiceNumber: string;
@@ -22,6 +25,9 @@ export interface Invoice {
   clientName: string;
   issueDate: string;
   serviceDate: string;
+  status: InvoiceStatus;
+  dueDate?: string | null;
+  paidAt?: string | null;
   currency: string;
   items: InvoiceItem[];
   subtotal: number;
