@@ -9,6 +9,7 @@ import {
     message,
     Empty,
     Popconfirm,
+    Tag,
 } from 'antd';
 import {
     PlusOutlined,
@@ -48,6 +49,7 @@ export function InvoicesPage() {
 
     const [searchText, setSearchText] = useState('');
     const [selectedClient, setSelectedClient] = useState<string | undefined>();
+    const [selectedStatus, setSelectedStatus] = useState<Invoice['status'] | undefined>();
     const [dateRange, setDateRange] = useState<
         [dayjs.Dayjs | null, dayjs.Dayjs | null] | null
     >(null);
@@ -67,6 +69,9 @@ export function InvoicesPage() {
             invoiceNumber: '',
             issueDate: dayjs().format('YYYY-MM-DD'),
             serviceDate: dayjs().format('YYYY-MM-DD'),
+            status: 'DRAFT',
+            dueDate: null,
+            paidAt: null,
         };
 
         navigate('/invoices/new', { state: { duplicate: duplicated } });
@@ -122,6 +127,8 @@ export function InvoicesPage() {
 
         const matchesClient = !selectedClient || invoice.clientId === selectedClient;
 
+        const matchesStatus = !selectedStatus || (invoice.status ?? 'DRAFT') === selectedStatus;
+
         const matchesDate =
             !dateRange ||
             !dateRange[0] ||
@@ -129,7 +136,7 @@ export function InvoicesPage() {
             (dayjs(invoice.issueDate).isAfter(dateRange[0].startOf('day')) &&
                 dayjs(invoice.issueDate).isBefore(dateRange[1].endOf('day')));
 
-        return matchesSearch && matchesClient && matchesDate;
+        return matchesSearch && matchesClient && matchesStatus && matchesDate;
     });
 
     const sortedInvoices = [...filteredInvoices].sort(
@@ -143,6 +150,23 @@ export function InvoicesPage() {
             key: 'invoiceNumber',
             width: 150,
             render: (text: string) => <strong>{text}</strong>,
+        },
+        {
+            title: t('invoices.status'),
+            dataIndex: 'status',
+            key: 'status',
+            width: 130,
+            render: (status: Invoice['status']) => {
+                const color =
+                    status === 'PAID'
+                        ? 'green'
+                        : status === 'SENT'
+                            ? 'blue'
+                            : status === 'CANCELLED'
+                                ? 'red'
+                                : 'default';
+                return <Tag color={color}>{t(`invoiceStatus.${status}`)}</Tag>;
+            },
         },
         {
             title: t('invoices.client'),
@@ -257,6 +281,17 @@ export function InvoicesPage() {
                         style={{ width: 300 }}
                         value={searchText}
                         onChange={(e) => setSearchText(e.target.value)}
+                        allowClear
+                    />
+                    <Select
+                        placeholder={t('invoices.filterStatus')}
+                        style={{ width: 180 }}
+                        value={selectedStatus}
+                        onChange={setSelectedStatus}
+                        options={['DRAFT', 'SENT', 'PAID', 'CANCELLED'].map((s) => ({
+                            label: t(`invoiceStatus.${s}`),
+                            value: s,
+                        }))}
                         allowClear
                     />
                     <Select

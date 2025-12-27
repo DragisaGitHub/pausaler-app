@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Button, Card, Descriptions, Table, Divider, Space, message } from 'antd';
+import { Button, Card, Descriptions, Table, Divider, Space, message, Select, DatePicker, Tag } from 'antd';
 import { ArrowLeftOutlined, EditOutlined, FilePdfOutlined } from '@ant-design/icons';
 import { Client, Invoice, InvoiceItem, Settings } from '../types';
 import { getStorage } from '../services/storageProvider';
@@ -24,6 +24,7 @@ export function InvoiceViewPage() {
   const [client, setClient] = useState<Client | undefined>(undefined);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [updatingMeta, setUpdatingMeta] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -85,6 +86,25 @@ export function InvoiceViewPage() {
       message.error(msg);
     } finally {
       setExporting(false);
+    }
+  };
+
+  const handleUpdateInvoice = async (patch: Partial<Invoice>) => {
+    if (updatingMeta) return;
+
+    try {
+      setUpdatingMeta(true);
+      const saved = await storage.updateInvoice(invoice.id, patch);
+      if (!saved) {
+        message.error(t('invoices.notFound'));
+        navigate('/');
+        return;
+      }
+      setInvoice(saved);
+    } catch {
+      message.error(t('newInvoice.saveError'));
+    } finally {
+      setUpdatingMeta(false);
     }
   };
 
@@ -204,6 +224,50 @@ export function InvoiceViewPage() {
                 {dayjs(invoice.serviceDate).format('DD.MM.YYYY')}
               </Descriptions.Item>
               <Descriptions.Item label={t('invoices.currency')}>{invoice.currency}</Descriptions.Item>
+              <Descriptions.Item label={t('invoiceView.status')}>
+                <Space size="small">
+                  <Tag
+                    color={
+                      invoice.status === 'PAID'
+                        ? 'green'
+                        : invoice.status === 'SENT'
+                          ? 'blue'
+                          : invoice.status === 'CANCELLED'
+                            ? 'red'
+                            : 'default'
+                    }
+                  >
+                    {t(`invoiceStatus.${invoice.status}`)}
+                  </Tag>
+                  <Select
+                    size="small"
+                    style={{ width: 160 }}
+                    value={invoice.status}
+                    onChange={(value) => void handleUpdateInvoice({ status: value as Invoice['status'] })}
+                    disabled={updatingMeta}
+                    options={['DRAFT', 'SENT', 'PAID', 'CANCELLED'].map((s) => ({
+                      value: s,
+                      label: t(`invoiceStatus.${s}`),
+                    }))}
+                  />
+                </Space>
+              </Descriptions.Item>
+              <Descriptions.Item label={t('invoiceView.dueDate')}>
+                <DatePicker
+                  allowClear
+                  disabled={updatingMeta}
+                  format="DD.MM.YYYY"
+                  value={invoice.dueDate ? dayjs(invoice.dueDate) : null}
+                  onChange={(d) =>
+                    void handleUpdateInvoice({ dueDate: d ? d.format('YYYY-MM-DD') : null })
+                  }
+                />
+              </Descriptions.Item>
+              {invoice.status === 'PAID' && (
+                <Descriptions.Item label={t('invoiceView.paidAt')}>
+                  {invoice.paidAt ? dayjs(invoice.paidAt).format('DD.MM.YYYY') : '-'}
+                </Descriptions.Item>
+              )}
             </Descriptions>
           </div>
         </div>
