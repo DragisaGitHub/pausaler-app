@@ -51,6 +51,13 @@ export interface Settings {
   nextInvoiceNumber: number;
   defaultCurrency: string;
   language: 'sr' | 'en';
+
+  smtpHost: string;
+  smtpPort: number;
+  smtpUser: string;
+  smtpPassword: string;
+  smtpFrom: string;
+  smtpUseTls: boolean;
 }
 
 export const CURRENCY_VALUES = ['RSD', 'EUR', 'USD'] as const;

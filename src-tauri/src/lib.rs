@@ -10,6 +10,10 @@ use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
+use lettre::message::{header::ContentType, Attachment, Mailbox, Message, MultiPart, SinglePart};
+use lettre::transport::smtp::authentication::Credentials;
+use lettre::{SmtpTransport, Transport};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InvoicePdfCompany {
     pub company_name: String,
@@ -298,6 +302,22 @@ pub struct Settings {
     pub next_invoice_number: i64,
     pub default_currency: String,
     pub language: String,
+    #[serde(default)]
+    pub smtp_host: String,
+    #[serde(default)]
+    pub smtp_port: i64,
+    #[serde(default)]
+    pub smtp_user: String,
+    #[serde(default)]
+    pub smtp_password: String,
+    #[serde(default)]
+    pub smtp_from: String,
+    #[serde(default = "default_smtp_use_tls")]
+    pub smtp_use_tls: bool,
+}
+
+fn default_smtp_use_tls() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -313,6 +333,12 @@ pub struct SettingsPatch {
     pub next_invoice_number: Option<i64>,
     pub default_currency: Option<String>,
     pub language: Option<String>,
+    pub smtp_host: Option<String>,
+    pub smtp_port: Option<i64>,
+    pub smtp_user: Option<String>,
+    pub smtp_password: Option<String>,
+    pub smtp_from: Option<String>,
+    pub smtp_use_tls: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -451,6 +477,12 @@ fn default_settings() -> Settings {
         next_invoice_number: 1,
         default_currency: "RSD".to_string(),
         language: "sr".to_string(),
+        smtp_host: "".to_string(),
+        smtp_port: 587,
+        smtp_user: "".to_string(),
+        smtp_password: "".to_string(),
+        smtp_from: "".to_string(),
+        smtp_use_tls: true,
     }
 }
 
@@ -534,6 +566,12 @@ fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
             nextInvoiceNumber INTEGER NOT NULL,
             defaultCurrency TEXT NOT NULL,
             language TEXT NOT NULL,
+            smtpHost TEXT NOT NULL DEFAULT '',
+            smtpPort INTEGER NOT NULL DEFAULT 587,
+            smtpUser TEXT NOT NULL DEFAULT '',
+            smtpPassword TEXT NOT NULL DEFAULT '',
+            smtpFrom TEXT NOT NULL DEFAULT '',
+            smtpUseTls INTEGER NOT NULL DEFAULT 1,
             data_json TEXT NOT NULL,
             updatedAt TEXT NOT NULL
         );
@@ -582,7 +620,7 @@ fn apply_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     // v=0 typically means a fresh DB (init_schema created the latest tables).
     if v == 0 {
-        conn.execute_batch("PRAGMA user_version = 3;")?;
+        conn.execute_batch("PRAGMA user_version = 4;")?;
         return Ok(());
     }
 
@@ -592,6 +630,19 @@ fn apply_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
              ALTER TABLE invoices ADD COLUMN dueDate TEXT;\n\
              ALTER TABLE invoices ADD COLUMN paidAt TEXT;\n\
              PRAGMA user_version = 3;\n",
+        )?;
+        v = 3;
+    }
+
+    if v < 4 {
+        conn.execute_batch(
+            "ALTER TABLE settings ADD COLUMN smtpHost TEXT NOT NULL DEFAULT '';\n\
+             ALTER TABLE settings ADD COLUMN smtpPort INTEGER NOT NULL DEFAULT 587;\n\
+             ALTER TABLE settings ADD COLUMN smtpUser TEXT NOT NULL DEFAULT '';\n\
+             ALTER TABLE settings ADD COLUMN smtpPassword TEXT NOT NULL DEFAULT '';\n\
+             ALTER TABLE settings ADD COLUMN smtpFrom TEXT NOT NULL DEFAULT '';\n\
+             ALTER TABLE settings ADD COLUMN smtpUseTls INTEGER NOT NULL DEFAULT 1;\n\
+             PRAGMA user_version = 4;\n",
         )?;
     }
 
@@ -616,10 +667,14 @@ fn ensure_settings_row(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         r#"INSERT INTO settings (
             id, isConfigured, companyName, pib, address, bankAccount, logoUrl,
-            invoicePrefix, nextInvoiceNumber, defaultCurrency, language, data_json, updatedAt
+            invoicePrefix, nextInvoiceNumber, defaultCurrency, language,
+            smtpHost, smtpPort, smtpUser, smtpPassword, smtpFrom, smtpUseTls,
+            data_json, updatedAt
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7,
-            ?8, ?9, ?10, ?11, ?12, ?13
+            ?8, ?9, ?10, ?11,
+            ?12, ?13, ?14, ?15, ?16, ?17,
+            ?18, ?19
         )"#,
         params![
             SETTINGS_ID,
@@ -633,6 +688,12 @@ fn ensure_settings_row(conn: &Connection) -> Result<(), rusqlite::Error> {
             s.next_invoice_number,
             s.default_currency,
             s.language,
+            s.smtp_host,
+            s.smtp_port,
+            s.smtp_user,
+            s.smtp_password,
+            s.smtp_from,
+            s.smtp_use_tls as i32,
             data_json,
             now,
         ],
@@ -707,7 +768,7 @@ impl DbState {
 fn read_settings_from_conn(conn: &Connection) -> Result<Settings, rusqlite::Error> {
     let row = conn
         .query_row(
-            "SELECT data_json, isConfigured, companyName, pib, address, bankAccount, logoUrl, invoicePrefix, nextInvoiceNumber, defaultCurrency, language FROM settings WHERE id = ?1",
+            "SELECT data_json, isConfigured, companyName, pib, address, bankAccount, logoUrl, invoicePrefix, nextInvoiceNumber, defaultCurrency, language, smtpHost, smtpPort, smtpUser, smtpPassword, smtpFrom, smtpUseTls FROM settings WHERE id = ?1",
             params![SETTINGS_ID],
             |r| {
                 Ok((
@@ -722,16 +783,28 @@ fn read_settings_from_conn(conn: &Connection) -> Result<Settings, rusqlite::Erro
                     r.get::<_, i64>(8)?,
                     r.get::<_, String>(9)?,
                     r.get::<_, String>(10)?,
+                    r.get::<_, String>(11)?,
+                    r.get::<_, i64>(12)?,
+                    r.get::<_, String>(13)?,
+                    r.get::<_, String>(14)?,
+                    r.get::<_, String>(15)?,
+                    r.get::<_, i64>(16)?,
                 ))
             },
         )
         .optional()?;
 
-    if let Some((data_json, is_cfg, company, pib, addr, bank, logo, prefix, next, currency, lang)) = row {
+    if let Some((data_json, is_cfg, company, pib, addr, bank, logo, prefix, next, currency, lang, smtp_host, smtp_port, smtp_user, smtp_password, smtp_from, smtp_use_tls)) = row {
         if let Ok(mut parsed) = serde_json::from_str::<Settings>(&data_json) {
             if let Some(v) = is_cfg {
                 parsed.is_configured = Some(v != 0);
             }
+            parsed.smtp_host = smtp_host;
+            parsed.smtp_port = smtp_port;
+            parsed.smtp_user = smtp_user;
+            parsed.smtp_password = smtp_password;
+            parsed.smtp_from = smtp_from;
+            parsed.smtp_use_tls = smtp_use_tls != 0;
             return Ok(parsed);
         }
 
@@ -746,6 +819,12 @@ fn read_settings_from_conn(conn: &Connection) -> Result<Settings, rusqlite::Erro
             next_invoice_number: next,
             default_currency: currency,
             language: lang,
+            smtp_host,
+            smtp_port,
+            smtp_user,
+            smtp_password,
+            smtp_from,
+            smtp_use_tls: smtp_use_tls != 0,
         });
     }
 
@@ -793,6 +872,24 @@ async fn update_settings(state: tauri::State<'_, DbState>, patch: SettingsPatch)
             if let Some(v) = patch.language {
                 current.language = v;
             }
+            if let Some(v) = patch.smtp_host {
+                current.smtp_host = v;
+            }
+            if let Some(v) = patch.smtp_port {
+                current.smtp_port = v;
+            }
+            if let Some(v) = patch.smtp_user {
+                current.smtp_user = v;
+            }
+            if let Some(v) = patch.smtp_password {
+                current.smtp_password = v;
+            }
+            if let Some(v) = patch.smtp_from {
+                current.smtp_from = v;
+            }
+            if let Some(v) = patch.smtp_use_tls {
+                current.smtp_use_tls = v;
+            }
 
             let now = now_iso();
             let json = serde_json::to_string(&current).unwrap_or_else(|_| "{}".to_string());
@@ -810,8 +907,14 @@ async fn update_settings(state: tauri::State<'_, DbState>, patch: SettingsPatch)
                     nextInvoiceNumber = ?9,
                     defaultCurrency = ?10,
                     language = ?11,
-                    data_json = ?12,
-                    updatedAt = ?13
+                    smtpHost = ?12,
+                    smtpPort = ?13,
+                    smtpUser = ?14,
+                    smtpPassword = ?15,
+                    smtpFrom = ?16,
+                    smtpUseTls = ?17,
+                    data_json = ?18,
+                    updatedAt = ?19
                    WHERE id = ?1"#,
                 params![
                     SETTINGS_ID,
@@ -825,6 +928,12 @@ async fn update_settings(state: tauri::State<'_, DbState>, patch: SettingsPatch)
                     current.next_invoice_number,
                     current.default_currency,
                     current.language,
+                    current.smtp_host,
+                    current.smtp_port,
+                    current.smtp_user,
+                    current.smtp_password,
+                    current.smtp_from,
+                    current.smtp_use_tls as i32,
                     json,
                     now,
                 ],
@@ -1178,6 +1287,113 @@ async fn delete_invoice(state: tauri::State<'_, DbState>, id: String) -> Result<
         .await
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendInvoiceEmailInput {
+    pub invoice_id: String,
+    pub to: String,
+    pub subject: String,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default = "default_true")]
+    pub include_pdf: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[tauri::command]
+async fn send_invoice_email(
+    state: tauri::State<'_, DbState>,
+    input: SendInvoiceEmailInput,
+) -> Result<bool, String> {
+    let (settings, invoice, client, to, subject, body, include_pdf) = state
+        .with_read("send_invoice_email_prepare", move |conn| {
+            let settings = read_settings_from_conn(conn)?;
+            let invoice = read_invoice_from_conn(conn, &input.invoice_id)?
+                .ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)?;
+            let client = read_client_from_conn(conn, &invoice.client_id)?;
+
+            Ok((
+                settings,
+                invoice,
+                client,
+                input.to,
+                input.subject,
+                input.body,
+                input.include_pdf,
+            ))
+        })
+        .await
+        .map_err(|e| {
+            if e.contains("QueryReturnedNoRows") {
+                "Invoice not found".to_string()
+            } else {
+                e
+            }
+        })?;
+
+    validate_smtp_settings(&settings)?;
+
+    if to.trim().is_empty() {
+        return Err("Recipient email address is required.".to_string());
+    }
+    if subject.trim().is_empty() {
+        return Err("Email subject is required.".to_string());
+    }
+
+    let from_mailbox: Mailbox = settings
+        .smtp_from
+        .parse()
+        .map_err(|_| "Invalid From address in SMTP settings.".to_string())?;
+    let to_mailbox: Mailbox = to
+        .parse()
+        .map_err(|_| "Invalid recipient email address.".to_string())?;
+
+    let body_text = body.unwrap_or_default();
+
+    let email = if include_pdf {
+        let payload = build_invoice_pdf_payload_from_db(&invoice, client.as_ref(), &settings);
+        let pdf_bytes = generate_pdf_bytes(&payload)?;
+        let filename = sanitize_filename(&format!("{}.pdf", invoice.invoice_number));
+
+        let attachment = Attachment::new(filename)
+            .body(pdf_bytes, ContentType::parse("application/pdf").unwrap());
+
+        Message::builder()
+            .from(from_mailbox)
+            .to(to_mailbox)
+            .subject(subject)
+            .multipart(
+                MultiPart::mixed()
+                    .singlepart(SinglePart::plain(body_text))
+                    .singlepart(attachment),
+            )
+            .map_err(|e| format!("Failed to build email: {e}"))?
+    } else {
+        Message::builder()
+            .from(from_mailbox)
+            .to(to_mailbox)
+            .subject(subject)
+            .body(body_text)
+            .map_err(|e| format!("Failed to build email: {e}"))?
+    };
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let transport = build_smtp_transport(&settings)?;
+        transport.send(&email).map_err(|e| {
+            eprintln!("[email] send failed: {e}");
+            format!("Failed to send email: {e}")
+        })?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    Ok(true)
+}
+
 #[tauri::command]
 fn export_invoice_pdf_to_downloads(app: tauri::AppHandle, payload: InvoicePdfPayload) -> Result<String, String> {
     let bytes = generate_pdf_bytes(&payload)?;
@@ -1225,8 +1441,108 @@ pub fn run() {
             get_invoice_by_id,
             create_invoice,
             update_invoice,
-            delete_invoice
+            delete_invoice,
+            send_invoice_email
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn validate_smtp_settings(s: &Settings) -> Result<(), String> {
+    if s.smtp_host.trim().is_empty() {
+        return Err("SMTP is not configured: missing host (Settings → Email).".to_string());
+    }
+    if s.smtp_port <= 0 || s.smtp_port > 65535 {
+        return Err("SMTP is not configured: invalid port (Settings → Email).".to_string());
+    }
+    if s.smtp_from.trim().is_empty() {
+        return Err("SMTP is not configured: missing From address (Settings → Email).".to_string());
+    }
+    let user_empty = s.smtp_user.trim().is_empty();
+    let pass_empty = s.smtp_password.trim().is_empty();
+    if user_empty ^ pass_empty {
+        return Err("SMTP auth is not configured correctly: set both user and password, or leave both empty.".to_string());
+    }
+    Ok(())
+}
+
+fn build_smtp_transport(s: &Settings) -> Result<SmtpTransport, String> {
+    validate_smtp_settings(s)?;
+    let port: u16 = s.smtp_port as u16;
+
+    let mut builder = if s.smtp_use_tls {
+        SmtpTransport::relay(&s.smtp_host)
+            .map_err(|e| format!("Invalid SMTP host: {e}"))?
+            .port(port)
+    } else {
+        SmtpTransport::builder_dangerous(&s.smtp_host).port(port)
+    };
+
+    if !s.smtp_user.trim().is_empty() {
+        builder = builder.credentials(Credentials::new(
+            s.smtp_user.clone(),
+            s.smtp_password.clone(),
+        ));
+    }
+
+    Ok(builder.build())
+}
+
+fn read_invoice_from_conn(conn: &Connection, id: &str) -> Result<Option<Invoice>, rusqlite::Error> {
+    let json: Option<String> = conn
+        .query_row(
+            "SELECT data_json FROM invoices WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()?;
+
+    Ok(json.and_then(|j| serde_json::from_str::<Invoice>(&j).ok()))
+}
+
+fn read_client_from_conn(conn: &Connection, id: &str) -> Result<Option<Client>, rusqlite::Error> {
+    let json: Option<String> = conn
+        .query_row(
+            "SELECT data_json FROM clients WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()?;
+
+    Ok(json.and_then(|j| serde_json::from_str::<Client>(&j).ok()))
+}
+
+fn build_invoice_pdf_payload_from_db(invoice: &Invoice, client: Option<&Client>, settings: &Settings) -> InvoicePdfPayload {
+    InvoicePdfPayload {
+        language: Some(settings.language.clone()),
+        invoice_number: invoice.invoice_number.clone(),
+        issue_date: invoice.issue_date.clone(),
+        service_date: invoice.service_date.clone(),
+        currency: invoice.currency.clone(),
+        subtotal: invoice.subtotal,
+        total: invoice.total,
+        notes: Some(invoice.notes.clone()),
+        company: InvoicePdfCompany {
+            company_name: settings.company_name.clone(),
+            pib: settings.pib.clone(),
+            address: settings.address.clone(),
+            bank_account: settings.bank_account.clone(),
+        },
+        client: InvoicePdfClient {
+            name: invoice.client_name.clone(),
+            pib: client.map(|c| c.pib.clone()).filter(|s| !s.trim().is_empty()),
+            address: client.map(|c| c.address.clone()).filter(|s| !s.trim().is_empty()),
+            email: client.map(|c| c.email.clone()).filter(|s| !s.trim().is_empty()),
+        },
+        items: invoice
+            .items
+            .iter()
+            .map(|it| InvoicePdfItem {
+                description: it.description.clone(),
+                quantity: it.quantity,
+                unit_price: it.unit_price,
+                total: it.total,
+            })
+            .collect(),
+    }
 }

@@ -1,0 +1,11 @@
+# Workaround for Windows MSVC linker error:
+# LINK : fatal error LNK1318: Unexpected PDB error
+# Disabling debuginfo avoids PDB generation during `cargo run` (used by `tauri dev`).
+
+[profile.dev]
+debug = 0
+incremental = false
+
+[build]
+# Force the MSVC linker to not produce a PDB.
+rustflags = ["-C", "link-arg=/DEBUG:NONE"]

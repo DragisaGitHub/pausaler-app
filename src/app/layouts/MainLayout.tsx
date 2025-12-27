@@ -40,7 +40,12 @@ export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
   ];
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
+    <Layout
+      style={{
+        minHeight: '100vh',
+        ['--app-sider-width' as any]: collapsed ? '80px' : '240px',
+      }}
+    >
       <Sider
         collapsible
         collapsed={collapsed}

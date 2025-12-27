@@ -25,4 +25,13 @@ export interface StorageAdapter {
   createInvoice(data: Omit<Invoice, 'id' | 'createdAt'>): Promise<Invoice>;
   updateInvoice(id: string, patch: Partial<Invoice>): Promise<Invoice | null>;
   deleteInvoice(id: string): Promise<boolean>;
+
+  // Email
+  sendInvoiceEmail(input: {
+    invoiceId: string;
+    to: string;
+    subject: string;
+    body?: string;
+    includePdf: boolean;
+  }): Promise<boolean>;
 }
