@@ -3,8 +3,9 @@ import { Layout, Menu, theme } from 'antd';
 import { FileTextOutlined, UserOutlined, SettingOutlined, DashboardOutlined, BarChartOutlined, DollarOutlined, ExportOutlined, FileSearchOutlined } from '@ant-design/icons';
 import { Link, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { TitleBar } from '../components/TitleBar';
 
-const { Header, Sider, Content } = Layout;
+const { Sider, Content } = Layout;
 
 export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
   const { t } = useTranslation();
@@ -66,67 +67,75 @@ export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
   ];
 
   return (
-    <Layout
+    <div
       style={{
-        minHeight: '100vh',
+        height: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
         ['--app-sider-width' as any]: collapsed ? '80px' : '240px',
       }}
     >
-      <Sider
-        collapsible
-        collapsed={collapsed}
-        onCollapse={(value) => setCollapsed(value)}
-        width={240}
-        style={{
-          overflow: 'auto',
-          height: '100vh',
-          position: 'sticky',
-          left: 0,
-          top: 0,
-          bottom: 0,
-        }}
-      >
-        <div
+      <TitleBar />
+
+      <Layout style={{ flex: 1, minHeight: 0 }}>
+        <Sider
+          collapsible
+          collapsed={collapsed}
+          onCollapse={(value) => setCollapsed(value)}
+          width={240}
           style={{
-            height: 64,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: '#fff',
-            fontSize: collapsed ? 18 : 20,
-            fontWeight: 600,
-            borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+            overflow: 'auto',
+            height: '100%',
           }}
         >
-          {collapsed ? <FileTextOutlined /> : t('app.brand')}
-        </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[selectedKey]}
-          items={menuItems}
-          style={{ borderRight: 0 }}
-        />
-      </Sider>
-      <Layout>
-        <Header style={{ padding: '0 24px', background: colorBgContainer }}>
-          <h1 style={{ margin: 0, fontSize: 24, fontWeight: 600 }}>
-            {t('app.title')}
-          </h1>
-        </Header>
-        <Content style={{ margin: '24px', minHeight: 280 }}>
           <div
             style={{
-              padding: 24,
-              minHeight: 360,
-              background: colorBgContainer,
-              borderRadius: 8,
+              height: 64,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#fff',
+              fontSize: collapsed ? 18 : 20,
+              fontWeight: 600,
+              borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
             }}
           >
-            <Outlet />
+            {collapsed ? <FileTextOutlined /> : t('app.brand')}
           </div>
-        </Content>
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={[selectedKey]}
+            items={menuItems}
+            style={{ borderRight: 0 }}
+          />
+        </Sider>
+
+        <Layout style={{ minHeight: 0 }}>
+          <Content
+            style={{
+              flex: 1,
+              minHeight: 0,
+              overflow: 'hidden',
+              padding: 24,
+            }}
+          >
+            <div
+              style={{
+                height: '100%',
+                minHeight: 0,
+                overflow: 'auto',
+                padding: 24,
+                background: colorBgContainer,
+                borderRadius: 8,
+              }}
+            >
+              <Outlet />
+            </div>
+          </Content>
+        </Layout>
       </Layout>
-    </Layout>
+    </div>
   );
 }
