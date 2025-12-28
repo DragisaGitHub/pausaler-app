@@ -66,6 +66,9 @@ export function createSqliteStorageAdapter(): StorageAdapter {
     // Invoices
     getAllInvoices: async (): Promise<Invoice[]> => invokeLogged<Invoice[]>('getAllInvoices', 'get_all_invoices'),
 
+    listInvoicesRange: async (from: string, to: string): Promise<Invoice[]> =>
+      invokeLogged<Invoice[]>('listInvoicesRange', 'list_invoices_range', { from, to }),
+
     getInvoiceById: async (id: string): Promise<Invoice | undefined> => {
       const res = await invokeLogged<Invoice | null>('getInvoiceById', 'get_invoice_by_id', { id });
       return res ?? undefined;
@@ -101,6 +104,13 @@ export function createSqliteStorageAdapter(): StorageAdapter {
 
     deleteExpense: async (id: string): Promise<boolean> =>
       invokeLogged<boolean>('deleteExpense', 'delete_expense', { id }),
+
+    // Exports
+    exportInvoicesCsv: async (from: string, to: string, outputPath: string): Promise<string> =>
+      invokeLogged<string>('exportInvoicesCsv', 'export_invoices_csv', { from, to, outputPath }),
+
+    exportExpensesCsv: async (from: string, to: string, outputPath: string): Promise<string> =>
+      invokeLogged<string>('exportExpensesCsv', 'export_expenses_csv', { from, to, outputPath }),
 
     // Email
     sendInvoiceEmail: async (input: {

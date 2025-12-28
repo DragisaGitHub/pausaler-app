@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Layout, Menu, theme } from 'antd';
-import { FileTextOutlined, UserOutlined, SettingOutlined, DashboardOutlined, BarChartOutlined, DollarOutlined } from '@ant-design/icons';
+import { FileTextOutlined, UserOutlined, SettingOutlined, DashboardOutlined, BarChartOutlined, DollarOutlined, ExportOutlined, FileSearchOutlined } from '@ant-design/icons';
 import { Link, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -38,6 +38,18 @@ export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
       icon: <DollarOutlined />,
       disabled: needsSetup,
       label: needsSetup ? <span>{t('nav.expenses')}</span> : <Link to="/expenses">{t('nav.expenses')}</Link>,
+    },
+    {
+      key: '/reports',
+      icon: <FileSearchOutlined />,
+      disabled: needsSetup,
+      label: needsSetup ? <span>{t('nav.reports')}</span> : <Link to="/reports">{t('nav.reports')}</Link>,
+    },
+    {
+      key: '/exports',
+      icon: <ExportOutlined />,
+      disabled: needsSetup,
+      label: needsSetup ? <span>{t('nav.exports')}</span> : <Link to="/exports">{t('nav.exports')}</Link>,
     },
     {
       key: '/clients',
