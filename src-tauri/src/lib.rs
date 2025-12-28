@@ -1489,6 +1489,34 @@ async fn get_all_invoices(state: tauri::State<'_, DbState>) -> Result<Vec<Invoic
 }
 
 #[tauri::command]
+async fn list_invoices_range(
+    state: tauri::State<'_, DbState>,
+    from: String,
+    to: String,
+) -> Result<Vec<Invoice>, String> {
+    state
+        .with_read("list_invoices_range", move |conn| {
+            let mut stmt = conn.prepare(
+                r#"SELECT data_json
+                   FROM invoices
+                   WHERE (issueDate >= ?1 AND issueDate <= ?2)
+                      OR (paidAt IS NOT NULL AND paidAt >= ?1 AND paidAt <= ?2)
+                   ORDER BY createdAt DESC"#,
+            )?;
+            let mut rows = stmt.query(params![from, to])?;
+            let mut out: Vec<Invoice> = Vec::new();
+            while let Some(row) = rows.next()? {
+                let json: String = row.get(0)?;
+                if let Ok(inv) = serde_json::from_str::<Invoice>(&json) {
+                    out.push(inv);
+                }
+            }
+            Ok(out)
+        })
+        .await
+}
+
+#[tauri::command]
 async fn get_invoice_by_id(state: tauri::State<'_, DbState>, id: String) -> Result<Option<Invoice>, String> {
     state
         .with_read("get_invoice_by_id", move |conn| {
@@ -2014,6 +2042,213 @@ fn export_invoice_pdf_to_downloads(app: tauri::AppHandle, payload: InvoicePdfPay
     Ok(full_path.to_string_lossy().to_string())
 }
 
+fn csv_escape_field(input: &str) -> String {
+    let needs_quotes = input.contains(',') || input.contains('"') || input.contains('\n') || input.contains('\r');
+    if !needs_quotes {
+        return input.to_string();
+    }
+    let escaped = input.replace('"', "\"\"");
+    format!("\"{}\"", escaped)
+}
+
+fn csv_join_row(fields: &[String]) -> String {
+    let mut out = String::new();
+    for (i, f) in fields.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&csv_escape_field(f));
+    }
+    out
+}
+
+fn format_money_csv(v: f64) -> String {
+    // Raw decimal, dot separator, deterministic 2 decimals.
+    format!("{:.2}", v)
+}
+
+fn format_quantity_csv(v: f64) -> String {
+    // Keep quantities readable without scientific notation for typical invoice values.
+    // Trim trailing zeros for determinism.
+    let s = format!("{:.6}", v);
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s.is_empty() { "0".to_string() } else { s.to_string() }
+}
+
+fn write_text_file(path: &std::path::Path, contents: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, contents).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn export_invoices_csv(
+    state: tauri::State<'_, DbState>,
+    from: String,
+    to: String,
+    output_path: String,
+) -> Result<String, String> {
+    let (default_currency, invoices) = state
+        .with_read("export_invoices_csv", move |conn| {
+            let settings = read_settings_from_conn(conn)?;
+            let mut stmt = conn.prepare(
+                r#"SELECT data_json
+                   FROM invoices
+                   WHERE issueDate >= ?1 AND issueDate <= ?2
+                   ORDER BY issueDate ASC, createdAt ASC"#,
+            )?;
+            let mut rows = stmt.query(params![from, to])?;
+            let mut out: Vec<Invoice> = Vec::new();
+            while let Some(row) = rows.next()? {
+                let json: String = row.get(0)?;
+                if let Ok(inv) = serde_json::from_str::<Invoice>(&json) {
+                    out.push(inv);
+                }
+            }
+            Ok((settings.default_currency, out))
+        })
+        .await?;
+
+    let header = [
+        "invoiceId",
+        "invoiceNumber",
+        "issueDate",
+        "serviceDate",
+        "dueDate",
+        "paidAt",
+        "status",
+        "clientId",
+        "clientName",
+        "currency",
+        "isDefaultCurrency",
+        "subtotal",
+        "total",
+        "itemId",
+        "itemDescription",
+        "itemQuantity",
+        "itemUnitPrice",
+        "itemTotal",
+        "notes",
+        "createdAt",
+    ];
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(csv_join_row(&header.iter().map(|s| s.to_string()).collect::<Vec<_>>()));
+
+    for inv in invoices {
+        let is_default = inv.currency.trim() == default_currency.trim();
+        let due = inv.due_date.clone().unwrap_or_default();
+        let paid = inv.paid_at.clone().unwrap_or_default();
+
+        for item in inv.items.iter() {
+            let row = vec![
+                inv.id.clone(),
+                inv.invoice_number.clone(),
+                inv.issue_date.clone(),
+                inv.service_date.clone(),
+                due.clone(),
+                paid.clone(),
+                inv.status.as_str().to_string(),
+                inv.client_id.clone(),
+                inv.client_name.clone(),
+                inv.currency.clone(),
+                if is_default { "true".to_string() } else { "false".to_string() },
+                format_money_csv(inv.subtotal),
+                format_money_csv(inv.total),
+                item.id.clone(),
+                item.description.clone(),
+                format_quantity_csv(item.quantity),
+                format_money_csv(item.unit_price),
+                format_money_csv(item.total),
+                inv.notes.clone(),
+                inv.created_at.clone(),
+            ];
+            lines.push(csv_join_row(&row));
+        }
+    }
+
+    let csv = lines.join("\r\n") + "\r\n";
+    let path = std::path::PathBuf::from(&output_path);
+    write_text_file(&path, &csv)?;
+    Ok(output_path)
+}
+
+#[tauri::command]
+async fn export_expenses_csv(
+    state: tauri::State<'_, DbState>,
+    from: String,
+    to: String,
+    output_path: String,
+) -> Result<String, String> {
+    let (default_currency, expenses) = state
+        .with_read("export_expenses_csv", move |conn| {
+            let settings = read_settings_from_conn(conn)?;
+            let mut stmt = conn.prepare(
+                r#"SELECT id, title, amount, currency, date, category, notes, createdAt
+                   FROM expenses
+                   WHERE date >= ?1 AND date <= ?2
+                   ORDER BY date ASC, createdAt ASC"#,
+            )?;
+
+            let rows = stmt.query_map(params![from, to], |r| {
+                Ok(Expense {
+                    id: r.get(0)?,
+                    title: r.get(1)?,
+                    amount: r.get(2)?,
+                    currency: r.get(3)?,
+                    date: r.get(4)?,
+                    category: r.get(5)?,
+                    notes: r.get(6)?,
+                    created_at: r.get(7)?,
+                })
+            })?;
+
+            let mut out: Vec<Expense> = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            Ok((settings.default_currency, out))
+        })
+        .await?;
+
+    let header = [
+        "expenseId",
+        "date",
+        "title",
+        "category",
+        "amount",
+        "currency",
+        "isDefaultCurrency",
+        "notes",
+        "createdAt",
+    ];
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(csv_join_row(&header.iter().map(|s| s.to_string()).collect::<Vec<_>>()));
+
+    for exp in expenses {
+        let is_default = exp.currency.trim() == default_currency.trim();
+        let row = vec![
+            exp.id,
+            exp.date,
+            exp.title,
+            exp.category.unwrap_or_default(),
+            format_money_csv(exp.amount),
+            exp.currency,
+            if is_default { "true".to_string() } else { "false".to_string() },
+            exp.notes.unwrap_or_default(),
+            exp.created_at,
+        ];
+        lines.push(csv_join_row(&row));
+    }
+
+    let csv = lines.join("\r\n") + "\r\n";
+    let path = std::path::PathBuf::from(&output_path);
+    write_text_file(&path, &csv)?;
+    Ok(output_path)
+}
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
@@ -2028,10 +2263,13 @@ pub fn run() {
             app.manage(db);
             Ok(())
         })
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             greet,
             export_invoice_pdf_to_downloads,
+            export_invoices_csv,
+            export_expenses_csv,
             get_settings,
             update_settings,
             generate_invoice_number,
@@ -2041,6 +2279,7 @@ pub fn run() {
             update_client,
             delete_client,
             get_all_invoices,
+            list_invoices_range,
             get_invoice_by_id,
             create_invoice,
             update_invoice,

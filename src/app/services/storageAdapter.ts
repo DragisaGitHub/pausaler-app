@@ -21,6 +21,7 @@ export interface StorageAdapter {
 
   // Invoices
   getAllInvoices(): Promise<Invoice[]>;
+  listInvoicesRange(from: string, to: string): Promise<Invoice[]>;
   getInvoiceById(id: string): Promise<Invoice | undefined>;
   createInvoice(data: Omit<Invoice, 'id' | 'createdAt'>): Promise<Invoice>;
   updateInvoice(id: string, patch: Partial<Invoice>): Promise<Invoice | null>;
@@ -34,6 +35,10 @@ export interface StorageAdapter {
     patch: Partial<Omit<Expense, 'id' | 'createdAt'>>
   ): Promise<Expense | null>;
   deleteExpense(id: string): Promise<boolean>;
+
+  // Exports
+  exportInvoicesCsv(from: string, to: string, outputPath: string): Promise<string>;
+  exportExpensesCsv(from: string, to: string, outputPath: string): Promise<string>;
 
   // Email
   sendInvoiceEmail(input: {
