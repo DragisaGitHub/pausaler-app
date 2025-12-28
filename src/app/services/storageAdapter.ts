@@ -1,4 +1,4 @@
-import type { Client, Invoice, Settings } from '../types';
+import type { Client, Expense, ExpenseRange, Invoice, Settings } from '../types';
 
 /**
  * Thin async abstraction over the persistence layer.
@@ -25,6 +25,15 @@ export interface StorageAdapter {
   createInvoice(data: Omit<Invoice, 'id' | 'createdAt'>): Promise<Invoice>;
   updateInvoice(id: string, patch: Partial<Invoice>): Promise<Invoice | null>;
   deleteInvoice(id: string): Promise<boolean>;
+
+  // Expenses
+  listExpenses(range?: ExpenseRange): Promise<Expense[]>;
+  createExpense(data: Omit<Expense, 'id' | 'createdAt'>): Promise<Expense>;
+  updateExpense(
+    id: string,
+    patch: Partial<Omit<Expense, 'id' | 'createdAt'>>
+  ): Promise<Expense | null>;
+  deleteExpense(id: string): Promise<boolean>;
 
   // Email
   sendInvoiceEmail(input: {

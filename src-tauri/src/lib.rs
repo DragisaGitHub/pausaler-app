@@ -11,6 +11,7 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
 use lettre::message::{header::ContentType, Attachment, Mailbox, Message, MultiPart, SinglePart};
+use lettre::transport::smtp::client::{Tls, TlsParameters};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{SmtpTransport, Transport};
 
@@ -83,6 +84,226 @@ fn format_money(v: f64) -> String {
     }
     let int_with_sep: String = out.chars().rev().collect();
     format!("{}.{}", int_with_sep, dec_part)
+}
+
+fn escape_html(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Renders the invoice email body as (html, text).
+///
+/// - Clean business-style layout, email-client-safe (tables + inline CSS).
+/// - Localized (sr/en) based on Settings.language.
+/// - User-provided message is rendered as an optional "personal note" section.
+fn render_invoice_email(
+    settings: &Settings,
+    invoice: &Invoice,
+    include_pdf: bool,
+    personal_note: Option<&str>,
+) -> (String, String) {
+    let lang = settings.language.to_ascii_lowercase();
+    let tr = |sr: &'static str, en: &'static str| if lang.starts_with("en") { en } else { sr };
+
+    let company_name = settings.company_name.trim();
+    let company_name = if company_name.is_empty() {
+        tr("Vaša firma", "Your company")
+    } else {
+        company_name
+    };
+
+    let invoice_number = invoice.invoice_number.trim();
+    let issue_date = invoice.issue_date.trim();
+    let due_date = invoice.due_date.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let total = format_money(invoice.total);
+    let currency = invoice.currency.trim();
+
+    let note = personal_note.map(str::trim).filter(|s| !s.is_empty());
+
+    let intro_line = if include_pdf {
+        tr("Faktura je priložena u PDF formatu.", "The invoice is attached as a PDF.")
+    } else {
+        tr(
+            "Faktura je poslata bez PDF priloga.",
+            "The invoice was sent without the PDF attachment.",
+        )
+    };
+
+    let bank_account = settings.bank_account.trim();
+    let bank_account = if bank_account.is_empty() {
+        None
+    } else {
+        Some(bank_account)
+    };
+
+    // ---- Plain-text fallback ----
+    let mut text = String::new();
+    text.push_str(&format!(
+        "{}\n\n{}: {}\n{}: {}\n{}: {}\n{}: {} {}\n",
+        tr("Faktura", "Invoice"),
+        tr("Firma", "Company"),
+        company_name,
+        tr("Broj fakture", "Invoice number"),
+        invoice_number,
+        tr("Datum izdavanja", "Issue date"),
+        issue_date,
+        tr("Ukupno", "Total"),
+        total,
+        currency
+    ));
+    if let Some(d) = due_date {
+        text.push_str(&format!("{}: {}\n", tr("Rok plaćanja", "Due date"), d));
+    }
+    text.push('\n');
+    text.push_str(intro_line);
+    text.push('\n');
+    if let Some(n) = note {
+        text.push_str(&format!("\n{}\n", tr("Lična poruka:", "Personal note:")));
+        text.push_str(n);
+        text.push('\n');
+    }
+
+    // Footer (plain text)
+    text.push_str(&format!(
+        "\n{}: {}\n",
+        tr("Firma", "Company"),
+        company_name
+    ));
+    if let Some(b) = bank_account {
+        text.push_str(&format!(
+            "{}: {}\n",
+            tr("Tekući račun", "Bank account"),
+            b
+        ));
+    }
+
+    // ---- HTML ----
+    let html_company = escape_html(company_name);
+    let html_invoice_number = escape_html(invoice_number);
+    let html_issue_date = escape_html(issue_date);
+    let html_total = escape_html(&total);
+    let html_currency = escape_html(currency);
+    let html_due_date = due_date.map(escape_html);
+    let html_note = note.map(escape_html);
+    let html_bank_account = bank_account.map(escape_html);
+
+    let title = tr("Faktura", "Invoice");
+    let h_company = tr("Firma", "Company");
+    let h_invoice_number = tr("Broj fakture", "Invoice number");
+    let h_issue_date = tr("Datum izdavanja", "Issue date");
+    let h_due_date = tr("Rok plaćanja", "Due date");
+    let h_total = tr("Ukupno", "Total");
+    let h_personal_note = tr("Lična poruka", "Personal note");
+
+    let mut html = String::new();
+    html.push_str("<!doctype html><html><head><meta charset=\"utf-8\"></head>");
+    html.push_str("<body style=\"margin:0;padding:0;background-color:#f6f7f9;font-family:Arial,Helvetica,sans-serif;\">");
+    html.push_str("<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"background-color:#f6f7f9;padding:24px 0;\">\
+<tr><td align=\"center\">\
+<table role=\"presentation\" width=\"600\" cellspacing=\"0\" cellpadding=\"0\" style=\"width:600px;max-width:600px;background-color:#ffffff;border:1px solid #e6e8ec;border-radius:10px;overflow:hidden;\">\
+");
+
+    // Header
+    html.push_str("<tr><td style=\"padding:20px 24px;\">" );
+    html.push_str(&format!(
+        "<div style=\"font-size:18px;font-weight:700;color:#111827;\">{}</div>",
+        escape_html(title)
+    ));
+    html.push_str(&format!(
+        "<div style=\"margin-top:6px;font-size:13px;color:#4b5563;\">{}: <strong style=\"color:#111827;\">{}</strong></div>",
+        escape_html(h_company),
+        html_company
+    ));
+    html.push_str("</td></tr>");
+
+    // Body
+    html.push_str("<tr><td style=\"padding:0 24px 20px 24px;\">" );
+    html.push_str(&format!(
+        "<p style=\"margin:16px 0 0 0;font-size:14px;line-height:20px;color:#111827;\">{}</p>",
+        escape_html(intro_line)
+    ));
+
+    // Details
+    html.push_str("<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top:16px;border:1px solid #e6e8ec;border-radius:10px;\">\
+<tr><td style=\"padding:14px;\">\
+<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\">\
+");
+
+    html.push_str(&format!(
+        "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:13px;color:#111827;font-weight:600;\">{}</td></tr>",
+        escape_html(h_invoice_number),
+        html_invoice_number
+    ));
+    html.push_str(&format!(
+        "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:13px;color:#111827;font-weight:600;\">{}</td></tr>",
+        escape_html(h_issue_date),
+        html_issue_date
+    ));
+    if let Some(d) = html_due_date {
+        html.push_str(&format!(
+            "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:13px;color:#111827;font-weight:600;\">{}</td></tr>",
+            escape_html(h_due_date),
+            d
+        ));
+    }
+    html.push_str(&format!(
+        "<tr><td style=\"padding:10px 0 0 0;border-top:1px solid #e6e8ec;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:10px 0 0 0;border-top:1px solid #e6e8ec;font-size:15px;color:#111827;font-weight:700;\">{} {}</td></tr>",
+        escape_html(h_total),
+        html_total,
+        html_currency
+    ));
+
+    html.push_str("</table></td></tr></table>");
+
+    // Personal note
+    if let Some(n) = html_note {
+        html.push_str("<div style=\"margin-top:16px;\">" );
+        html.push_str(&format!(
+            "<div style=\"font-size:12px;color:#4b5563;font-weight:700;letter-spacing:0.02em;text-transform:uppercase;\">{}</div>",
+            escape_html(h_personal_note)
+        ));
+        html.push_str(&format!(
+            "<div style=\"margin-top:8px;padding:12px 14px;border:1px solid #e6e8ec;border-radius:10px;background-color:#ffffff;font-size:14px;line-height:20px;color:#111827;white-space:pre-wrap;\">{}</div>",
+            n
+        ));
+        html.push_str("</div>");
+    }
+
+    html.push_str("</td></tr>");
+
+    // Footer
+    html.push_str("<tr><td style=\"padding:16px 24px 22px 24px;\">" );
+    html.push_str(&format!(
+        "<div style=\"font-size:12px;color:#6b7280;\">{}: <strong style=\"color:#111827;\">{}</strong></div>",
+        escape_html(h_company),
+        html_company
+    ));
+    if let Some(b) = html_bank_account {
+        html.push_str(&format!(
+            "<div style=\"margin-top:4px;font-size:12px;color:#6b7280;\">{}: <strong style=\"color:#111827;\">{}</strong></div>",
+            escape_html(tr("Tekući račun", "Bank account")),
+            b
+        ));
+    }
+    html.push_str(&format!(
+        "<div style=\"margin-top:8px;font-size:12px;color:#6b7280;\">{}</div>",
+        escape_html(tr("Generisano iz Pausaler aplikacije.", "Generated from Pausaler app."))
+    ));
+    html.push_str("</td></tr>");
+
+    html.push_str("</table></td></tr></table></body></html>");
+
+    (html, text)
 }
 
 fn push_line(
@@ -288,6 +509,45 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
         .map_err(|e| e.to_string())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SmtpTlsMode {
+    Implicit,
+    Starttls,
+}
+
+impl SmtpTlsMode {
+    fn as_str(&self) -> &'static str {
+        match self {
+            SmtpTlsMode::Implicit => "implicit",
+            SmtpTlsMode::Starttls => "starttls",
+        }
+    }
+}
+
+fn default_smtp_tls_mode_for_port(port: i64) -> SmtpTlsMode {
+    match port {
+        465 => SmtpTlsMode::Implicit,
+        587 => SmtpTlsMode::Starttls,
+        _ => SmtpTlsMode::Starttls,
+    }
+}
+
+fn parse_smtp_tls_mode_str(v: &str) -> Option<SmtpTlsMode> {
+    let s = v.trim();
+    if s.eq_ignore_ascii_case("implicit") {
+        Some(SmtpTlsMode::Implicit)
+    } else if s.eq_ignore_ascii_case("starttls") {
+        Some(SmtpTlsMode::Starttls)
+    } else {
+        None
+    }
+}
+
+fn resolved_smtp_tls_mode(mode: Option<SmtpTlsMode>, port: i64) -> SmtpTlsMode {
+    mode.unwrap_or_else(|| default_smtp_tls_mode_for_port(port))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -314,6 +574,8 @@ pub struct Settings {
     pub smtp_from: String,
     #[serde(default = "default_smtp_use_tls")]
     pub smtp_use_tls: bool,
+    #[serde(default)]
+    pub smtp_tls_mode: Option<SmtpTlsMode>,
 }
 
 fn default_smtp_use_tls() -> bool {
@@ -339,6 +601,7 @@ pub struct SettingsPatch {
     pub smtp_password: Option<String>,
     pub smtp_from: Option<String>,
     pub smtp_use_tls: Option<bool>,
+    pub smtp_tls_mode: Option<SmtpTlsMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -452,6 +715,60 @@ pub struct InvoicePatch {
     pub notes: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Expense {
+    pub id: String,
+    pub title: String,
+    pub amount: f64,
+    pub currency: String,
+    pub date: String, // YYYY-MM-DD
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewExpense {
+    pub title: String,
+    pub amount: f64,
+    pub currency: String,
+    pub date: String, // YYYY-MM-DD
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpensePatch {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub amount: Option<f64>,
+    #[serde(default)]
+    pub currency: Option<String>,
+    #[serde(default)]
+    pub date: Option<String>,
+    #[serde(default)]
+    pub category: Option<Option<String>>,
+    #[serde(default)]
+    pub notes: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpenseRange {
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub to: Option<String>,
+}
+
 const SETTINGS_ID: &str = "default";
 
 fn now_iso() -> String {
@@ -483,6 +800,7 @@ fn default_settings() -> Settings {
         smtp_password: "".to_string(),
         smtp_from: "".to_string(),
         smtp_use_tls: true,
+        smtp_tls_mode: Some(SmtpTlsMode::Starttls),
     }
 }
 
@@ -572,6 +890,7 @@ fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
             smtpPassword TEXT NOT NULL DEFAULT '',
             smtpFrom TEXT NOT NULL DEFAULT '',
             smtpUseTls INTEGER NOT NULL DEFAULT 1,
+            smtpTlsMode TEXT NOT NULL DEFAULT '',
             data_json TEXT NOT NULL,
             updatedAt TEXT NOT NULL
         );
@@ -601,9 +920,21 @@ fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
             data_json TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS expenses (
+            id TEXT PRIMARY KEY NOT NULL,
+            title TEXT NOT NULL,
+            amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            date TEXT NOT NULL,
+            category TEXT,
+            notes TEXT,
+            createdAt TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_invoices_invoiceNumber ON invoices(invoiceNumber);
         CREATE INDEX IF NOT EXISTS idx_invoices_clientId ON invoices(clientId);
         CREATE INDEX IF NOT EXISTS idx_clients_name ON clients(name);
+        CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date);
         "#,
     )?;
     Ok(())
@@ -620,7 +951,7 @@ fn apply_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     // v=0 typically means a fresh DB (init_schema created the latest tables).
     if v == 0 {
-        conn.execute_batch("PRAGMA user_version = 4;")?;
+        conn.execute_batch("PRAGMA user_version = 6;")?;
         return Ok(());
     }
 
@@ -643,6 +974,32 @@ fn apply_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
              ALTER TABLE settings ADD COLUMN smtpFrom TEXT NOT NULL DEFAULT '';\n\
              ALTER TABLE settings ADD COLUMN smtpUseTls INTEGER NOT NULL DEFAULT 1;\n\
              PRAGMA user_version = 4;\n",
+        )?;
+        v = 4;
+    }
+
+    if v < 5 {
+        conn.execute_batch(
+            "ALTER TABLE settings ADD COLUMN smtpTlsMode TEXT NOT NULL DEFAULT '';\n\
+             PRAGMA user_version = 5;\n",
+        )?;
+        v = 5;
+    }
+
+    if v < 6 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS expenses (\n\
+                id TEXT PRIMARY KEY NOT NULL,\n\
+                title TEXT NOT NULL,\n\
+                amount REAL NOT NULL,\n\
+                currency TEXT NOT NULL,\n\
+                date TEXT NOT NULL,\n\
+                category TEXT,\n\
+                notes TEXT,\n\
+                createdAt TEXT NOT NULL\n\
+            );\n\
+             CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date);\n\
+             PRAGMA user_version = 6;\n",
         )?;
     }
 
@@ -668,13 +1025,13 @@ fn ensure_settings_row(conn: &Connection) -> Result<(), rusqlite::Error> {
         r#"INSERT INTO settings (
             id, isConfigured, companyName, pib, address, bankAccount, logoUrl,
             invoicePrefix, nextInvoiceNumber, defaultCurrency, language,
-            smtpHost, smtpPort, smtpUser, smtpPassword, smtpFrom, smtpUseTls,
+            smtpHost, smtpPort, smtpUser, smtpPassword, smtpFrom, smtpUseTls, smtpTlsMode,
             data_json, updatedAt
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7,
             ?8, ?9, ?10, ?11,
-            ?12, ?13, ?14, ?15, ?16, ?17,
-            ?18, ?19
+            ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+            ?19, ?20
         )"#,
         params![
             SETTINGS_ID,
@@ -694,6 +1051,7 @@ fn ensure_settings_row(conn: &Connection) -> Result<(), rusqlite::Error> {
             s.smtp_password,
             s.smtp_from,
             s.smtp_use_tls as i32,
+            resolved_smtp_tls_mode(s.smtp_tls_mode, s.smtp_port).as_str(),
             data_json,
             now,
         ],
@@ -768,7 +1126,7 @@ impl DbState {
 fn read_settings_from_conn(conn: &Connection) -> Result<Settings, rusqlite::Error> {
     let row = conn
         .query_row(
-            "SELECT data_json, isConfigured, companyName, pib, address, bankAccount, logoUrl, invoicePrefix, nextInvoiceNumber, defaultCurrency, language, smtpHost, smtpPort, smtpUser, smtpPassword, smtpFrom, smtpUseTls FROM settings WHERE id = ?1",
+            "SELECT data_json, isConfigured, companyName, pib, address, bankAccount, logoUrl, invoicePrefix, nextInvoiceNumber, defaultCurrency, language, smtpHost, smtpPort, smtpUser, smtpPassword, smtpFrom, smtpUseTls, smtpTlsMode FROM settings WHERE id = ?1",
             params![SETTINGS_ID],
             |r| {
                 Ok((
@@ -789,12 +1147,13 @@ fn read_settings_from_conn(conn: &Connection) -> Result<Settings, rusqlite::Erro
                     r.get::<_, String>(14)?,
                     r.get::<_, String>(15)?,
                     r.get::<_, i64>(16)?,
+                    r.get::<_, String>(17)?,
                 ))
             },
         )
         .optional()?;
 
-    if let Some((data_json, is_cfg, company, pib, addr, bank, logo, prefix, next, currency, lang, smtp_host, smtp_port, smtp_user, smtp_password, smtp_from, smtp_use_tls)) = row {
+    if let Some((data_json, is_cfg, company, pib, addr, bank, logo, prefix, next, currency, lang, smtp_host, smtp_port, smtp_user, smtp_password, smtp_from, smtp_use_tls, smtp_tls_mode)) = row {
         if let Ok(mut parsed) = serde_json::from_str::<Settings>(&data_json) {
             if let Some(v) = is_cfg {
                 parsed.is_configured = Some(v != 0);
@@ -805,9 +1164,16 @@ fn read_settings_from_conn(conn: &Connection) -> Result<Settings, rusqlite::Erro
             parsed.smtp_password = smtp_password;
             parsed.smtp_from = smtp_from;
             parsed.smtp_use_tls = smtp_use_tls != 0;
+            if parsed.smtp_tls_mode.is_none() {
+                parsed.smtp_tls_mode = parse_smtp_tls_mode_str(&smtp_tls_mode);
+            }
+            if parsed.smtp_tls_mode.is_none() {
+                parsed.smtp_tls_mode = Some(default_smtp_tls_mode_for_port(parsed.smtp_port));
+            }
             return Ok(parsed);
         }
 
+        let mode = parse_smtp_tls_mode_str(&smtp_tls_mode).unwrap_or_else(|| default_smtp_tls_mode_for_port(smtp_port));
         return Ok(Settings {
             is_configured: is_cfg.map(|v| v != 0),
             company_name: company,
@@ -825,6 +1191,7 @@ fn read_settings_from_conn(conn: &Connection) -> Result<Settings, rusqlite::Erro
             smtp_password,
             smtp_from,
             smtp_use_tls: smtp_use_tls != 0,
+            smtp_tls_mode: Some(mode),
         });
     }
 
@@ -875,8 +1242,11 @@ async fn update_settings(state: tauri::State<'_, DbState>, patch: SettingsPatch)
             if let Some(v) = patch.smtp_host {
                 current.smtp_host = v;
             }
+
+            let mut smtp_port_changed = false;
             if let Some(v) = patch.smtp_port {
                 current.smtp_port = v;
+                smtp_port_changed = true;
             }
             if let Some(v) = patch.smtp_user {
                 current.smtp_user = v;
@@ -889,6 +1259,24 @@ async fn update_settings(state: tauri::State<'_, DbState>, patch: SettingsPatch)
             }
             if let Some(v) = patch.smtp_use_tls {
                 current.smtp_use_tls = v;
+            }
+
+            let smtp_tls_mode_changed = patch.smtp_tls_mode.is_some();
+            if let Some(v) = patch.smtp_tls_mode {
+                current.smtp_tls_mode = Some(v);
+            }
+
+            // Apply defaults based on well-known ports if the user didn't explicitly set the TLS mode.
+            if smtp_port_changed && !smtp_tls_mode_changed {
+                if current.smtp_port == 465 {
+                    current.smtp_tls_mode = Some(SmtpTlsMode::Implicit);
+                }
+                if current.smtp_port == 587 {
+                    current.smtp_tls_mode = Some(SmtpTlsMode::Starttls);
+                }
+            }
+            if current.smtp_tls_mode.is_none() {
+                current.smtp_tls_mode = Some(default_smtp_tls_mode_for_port(current.smtp_port));
             }
 
             let now = now_iso();
@@ -913,8 +1301,9 @@ async fn update_settings(state: tauri::State<'_, DbState>, patch: SettingsPatch)
                     smtpPassword = ?15,
                     smtpFrom = ?16,
                     smtpUseTls = ?17,
-                    data_json = ?18,
-                    updatedAt = ?19
+                    smtpTlsMode = ?18,
+                    data_json = ?19,
+                    updatedAt = ?20
                    WHERE id = ?1"#,
                 params![
                     SETTINGS_ID,
@@ -934,6 +1323,7 @@ async fn update_settings(state: tauri::State<'_, DbState>, patch: SettingsPatch)
                     current.smtp_password,
                     current.smtp_from,
                     current.smtp_use_tls as i32,
+                    resolved_smtp_tls_mode(current.smtp_tls_mode, current.smtp_port).as_str(),
                     json,
                     now,
                 ],
@@ -1287,6 +1677,220 @@ async fn delete_invoice(state: tauri::State<'_, DbState>, id: String) -> Result<
         .await
 }
 
+#[tauri::command]
+async fn list_expenses(
+    state: tauri::State<'_, DbState>,
+    range: Option<ExpenseRange>,
+) -> Result<Vec<Expense>, String> {
+    state
+        .with_read("list_expenses", move |conn| {
+            let (from, to) = match range {
+                Some(r) => (r.from, r.to),
+                None => (None, None),
+            };
+
+            let mut stmt = conn.prepare(
+                r#"SELECT id, title, amount, currency, date, category, notes, createdAt
+                   FROM expenses
+                   WHERE (?1 IS NULL OR date >= ?1)
+                     AND (?2 IS NULL OR date <= ?2)
+                   ORDER BY date DESC, createdAt DESC"#,
+            )?;
+
+            let rows = stmt.query_map(params![from, to], |r| {
+                Ok(Expense {
+                    id: r.get(0)?,
+                    title: r.get(1)?,
+                    amount: r.get(2)?,
+                    currency: r.get(3)?,
+                    date: r.get(4)?,
+                    category: r.get(5)?,
+                    notes: r.get(6)?,
+                    created_at: r.get(7)?,
+                })
+            })?;
+
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            Ok(out)
+        })
+        .await
+}
+
+#[tauri::command]
+async fn create_expense(
+    state: tauri::State<'_, DbState>,
+    input: NewExpense,
+) -> Result<Expense, String> {
+    let NewExpense {
+        title,
+        amount,
+        currency,
+        date,
+        category,
+        notes,
+    } = input;
+
+    let title = title.trim().to_string();
+    let currency = currency.trim().to_string();
+    let date = date.trim().to_string();
+    let category = category.and_then(|s| {
+        let t = s.trim().to_string();
+        if t.is_empty() { None } else { Some(t) }
+    });
+    let notes = notes.and_then(|s| {
+        let t = s.trim().to_string();
+        if t.is_empty() { None } else { Some(t) }
+    });
+
+    if title.is_empty() {
+        return Err("Title is required.".to_string());
+    }
+    if !amount.is_finite() || amount <= 0.0 {
+        return Err("Amount must be greater than 0.".to_string());
+    }
+    if currency.is_empty() {
+        return Err("Currency is required.".to_string());
+    }
+    if date.is_empty() {
+        return Err("Date is required.".to_string());
+    }
+
+    state
+        .with_write("create_expense", move |conn| {
+            let id = Uuid::new_v4().to_string();
+            let created_at = now_iso();
+
+            conn.execute(
+                r#"INSERT INTO expenses (id, title, amount, currency, date, category, notes, createdAt)
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"#,
+                params![
+                    id,
+                    title,
+                    amount,
+                    currency,
+                    date,
+                    category,
+                    notes,
+                    created_at,
+                ],
+            )?;
+
+            Ok(Expense {
+                id,
+                title,
+                amount,
+                currency,
+                date,
+                category,
+                notes,
+                created_at,
+            })
+        })
+        .await
+}
+
+#[tauri::command]
+async fn update_expense(
+    state: tauri::State<'_, DbState>,
+    id: String,
+    patch: ExpensePatch,
+) -> Result<Option<Expense>, String> {
+    if let Some(t) = patch.title.as_deref() {
+        if t.trim().is_empty() {
+            return Err("Title is required.".to_string());
+        }
+    }
+    if let Some(a) = patch.amount {
+        if !a.is_finite() || a <= 0.0 {
+            return Err("Amount must be greater than 0.".to_string());
+        }
+    }
+    if let Some(c) = patch.currency.as_deref() {
+        if c.trim().is_empty() {
+            return Err("Currency is required.".to_string());
+        }
+    }
+    if let Some(d) = patch.date.as_deref() {
+        if d.trim().is_empty() {
+            return Err("Date is required.".to_string());
+        }
+    }
+
+    state
+        .with_write("update_expense", move |conn| {
+            let mut existing = match read_expense_from_conn(conn, &id)? {
+                Some(e) => e,
+                None => return Ok(None),
+            };
+
+            if let Some(v) = patch.title {
+                existing.title = v;
+            }
+            if let Some(v) = patch.amount {
+                existing.amount = v;
+            }
+            if let Some(v) = patch.currency {
+                existing.currency = v;
+            }
+            if let Some(v) = patch.date {
+                existing.date = v;
+            }
+            if let Some(v) = patch.category {
+                existing.category = v;
+            }
+            if let Some(v) = patch.notes {
+                existing.notes = v;
+            }
+
+            existing.title = existing.title.trim().to_string();
+            existing.currency = existing.currency.trim().to_string();
+            existing.date = existing.date.trim().to_string();
+            existing.category = existing
+                .category
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
+            existing.notes = existing
+                .notes
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
+
+            conn.execute(
+                r#"UPDATE expenses
+                   SET title=?2, amount=?3, currency=?4, date=?5, category=?6, notes=?7
+                   WHERE id=?1"#,
+                params![
+                    id,
+                    existing.title,
+                    existing.amount,
+                    existing.currency,
+                    existing.date,
+                    existing.category,
+                    existing.notes,
+                ],
+            )?;
+
+            Ok(Some(existing))
+        })
+        .await
+}
+
+#[tauri::command]
+async fn delete_expense(state: tauri::State<'_, DbState>, id: String) -> Result<bool, String> {
+    state
+        .with_write("delete_expense", move |conn| {
+            let affected = conn.execute("DELETE FROM expenses WHERE id = ?1", params![id])?;
+            Ok(affected > 0)
+        })
+        .await
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendInvoiceEmailInput {
@@ -1351,7 +1955,10 @@ async fn send_invoice_email(
         .parse()
         .map_err(|_| "Invalid recipient email address.".to_string())?;
 
-    let body_text = body.unwrap_or_default();
+    let (html_body, text_body) = render_invoice_email(&settings, &invoice, include_pdf, body.as_deref());
+    let alternative = MultiPart::alternative()
+        .singlepart(SinglePart::plain(text_body))
+        .singlepart(SinglePart::html(html_body));
 
     let email = if include_pdf {
         let payload = build_invoice_pdf_payload_from_db(&invoice, client.as_ref(), &settings);
@@ -1365,18 +1972,14 @@ async fn send_invoice_email(
             .from(from_mailbox)
             .to(to_mailbox)
             .subject(subject)
-            .multipart(
-                MultiPart::mixed()
-                    .singlepart(SinglePart::plain(body_text))
-                    .singlepart(attachment),
-            )
+            .multipart(MultiPart::mixed().multipart(alternative).singlepart(attachment))
             .map_err(|e| format!("Failed to build email: {e}"))?
     } else {
         Message::builder()
             .from(from_mailbox)
             .to(to_mailbox)
             .subject(subject)
-            .body(body_text)
+            .multipart(alternative)
             .map_err(|e| format!("Failed to build email: {e}"))?
     };
 
@@ -1442,6 +2045,10 @@ pub fn run() {
             create_invoice,
             update_invoice,
             delete_invoice,
+            list_expenses,
+            create_expense,
+            update_expense,
+            delete_expense,
             send_invoice_email
         ])
         .run(tauri::generate_context!())
@@ -1463,6 +2070,16 @@ fn validate_smtp_settings(s: &Settings) -> Result<(), String> {
     if user_empty ^ pass_empty {
         return Err("SMTP auth is not configured correctly: set both user and password, or leave both empty.".to_string());
     }
+
+    if s.smtp_use_tls {
+        let mode = resolved_smtp_tls_mode(s.smtp_tls_mode, s.smtp_port);
+        if s.smtp_port == 465 && mode != SmtpTlsMode::Implicit {
+            return Err("SMTP TLS mode mismatch: port 465 requires Implicit TLS (SMTPS).".to_string());
+        }
+        if s.smtp_port == 587 && mode != SmtpTlsMode::Starttls {
+            return Err("SMTP TLS mode mismatch: port 587 requires STARTTLS.".to_string());
+        }
+    }
     Ok(())
 }
 
@@ -1470,12 +2087,26 @@ fn build_smtp_transport(s: &Settings) -> Result<SmtpTransport, String> {
     validate_smtp_settings(s)?;
     let port: u16 = s.smtp_port as u16;
 
+    let host = s.smtp_host.trim();
+    if host.is_empty() {
+        return Err("SMTP is not configured: missing host (Settings → Email).".to_string());
+    }
+
     let mut builder = if s.smtp_use_tls {
-        SmtpTransport::relay(&s.smtp_host)
-            .map_err(|e| format!("Invalid SMTP host: {e}"))?
-            .port(port)
+        match resolved_smtp_tls_mode(s.smtp_tls_mode, s.smtp_port) {
+            SmtpTlsMode::Implicit => {
+                let tls_params = TlsParameters::new(host.to_string())
+                    .map_err(|e| format!("Failed to configure TLS parameters: {e}"))?;
+                SmtpTransport::builder_dangerous(host)
+                    .port(port)
+                    .tls(Tls::Wrapper(tls_params))
+            }
+            SmtpTlsMode::Starttls => SmtpTransport::starttls_relay(host)
+                .map_err(|e| format!("Invalid SMTP host: {e}"))?
+                .port(port),
+        }
     } else {
-        SmtpTransport::builder_dangerous(&s.smtp_host).port(port)
+        SmtpTransport::builder_dangerous(host).port(port)
     };
 
     if !s.smtp_user.trim().is_empty() {
@@ -1498,6 +2129,26 @@ fn read_invoice_from_conn(conn: &Connection, id: &str) -> Result<Option<Invoice>
         .optional()?;
 
     Ok(json.and_then(|j| serde_json::from_str::<Invoice>(&j).ok()))
+}
+
+fn read_expense_from_conn(conn: &Connection, id: &str) -> Result<Option<Expense>, rusqlite::Error> {
+    conn.query_row(
+        "SELECT id, title, amount, currency, date, category, notes, createdAt FROM expenses WHERE id = ?1",
+        params![id],
+        |r| {
+            Ok(Expense {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                amount: r.get(2)?,
+                currency: r.get(3)?,
+                date: r.get(4)?,
+                category: r.get(5)?,
+                notes: r.get(6)?,
+                created_at: r.get(7)?,
+            })
+        },
+    )
+    .optional()
 }
 
 fn read_client_from_conn(conn: &Connection, id: &str) -> Result<Option<Client>, rusqlite::Error> {

@@ -58,6 +58,24 @@ export interface Settings {
   smtpPassword: string;
   smtpFrom: string;
   smtpUseTls: boolean;
+  smtpTlsMode: 'implicit' | 'starttls';
+}
+
+export interface Expense {
+  id: string;
+  title: string;
+  amount: number;
+  currency: string;
+  /** YYYY-MM-DD */
+  date: string;
+  category?: string | null;
+  notes?: string | null;
+  createdAt: string;
+}
+
+export interface ExpenseRange {
+  from?: string;
+  to?: string;
 }
 
 export const CURRENCY_VALUES = ['RSD', 'EUR', 'USD'] as const;

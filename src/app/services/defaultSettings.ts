@@ -17,4 +17,5 @@ export const defaultSettings: Settings = {
   smtpPassword: '',
   smtpFrom: '',
   smtpUseTls: true,
+  smtpTlsMode: 'starttls',
 };

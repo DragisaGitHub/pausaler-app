@@ -14,9 +14,19 @@ export function SettingsPage() {
 
   useEffect(() => {
     if (!settings) return;
-    form.setFieldsValue(settings);
+    const next: any = { ...settings };
+    if (!next.smtpTlsMode) {
+      next.smtpTlsMode = next.smtpPort === 465 ? 'implicit' : 'starttls';
+    }
+    form.setFieldsValue(next);
     setLogoUrl(settings.logoUrl || '');
   }, [form, settings]);
+
+  const applyDefaultTlsModeForPort = (port: number | null) => {
+    if (!port) return;
+    if (port === 465) form.setFieldValue('smtpTlsMode', 'implicit');
+    if (port === 587) form.setFieldValue('smtpTlsMode', 'starttls');
+  };
 
   const handleSubmit = async (values: Settings) => {
     try {
@@ -180,6 +190,7 @@ export function SettingsPage() {
                           max={65535}
                           style={{ width: '100%' }}
                           placeholder={t('settings.smtpPortPlaceholder')}
+                          onChange={(value) => applyDefaultTlsModeForPort(typeof value === 'number' ? value : null)}
                         />
                       </Form.Item>
                     </div>
@@ -196,6 +207,44 @@ export function SettingsPage() {
 
                     <Form.Item label={t('settings.smtpFrom')} name="smtpFrom">
                       <Input placeholder={t('settings.smtpFromPlaceholder')} />
+                    </Form.Item>
+
+                    <Form.Item dependencies={['smtpUseTls']} noStyle>
+                      {({ getFieldValue }) => (
+                        <Form.Item
+                          label={t('settings.smtpTlsMode')}
+                          name="smtpTlsMode"
+                          extra={t('settings.smtpTlsModeHelp')}
+                          dependencies={['smtpUseTls', 'smtpPort']}
+                          rules={[
+                            ({ getFieldValue }) => ({
+                              validator(_, value) {
+                                const useTls = !!getFieldValue('smtpUseTls');
+                                if (!useTls) return Promise.resolve();
+                                if (value !== 'implicit' && value !== 'starttls') {
+                                  return Promise.reject(new Error(t('settings.smtpTlsModeReq')));
+                                }
+                                const port = Number(getFieldValue('smtpPort'));
+                                if (port === 465 && value !== 'implicit') {
+                                  return Promise.reject(new Error(t('settings.smtpTlsModeMismatch465')));
+                                }
+                                if (port === 587 && value !== 'starttls') {
+                                  return Promise.reject(new Error(t('settings.smtpTlsModeMismatch587')));
+                                }
+                                return Promise.resolve();
+                              },
+                            }),
+                          ]}
+                        >
+                          <Select
+                            disabled={!getFieldValue('smtpUseTls')}
+                            options={[
+                              { value: 'implicit', label: t('settings.smtpTlsModeImplicit') },
+                              { value: 'starttls', label: t('settings.smtpTlsModeStarttls') },
+                            ]}
+                          />
+                        </Form.Item>
+                      )}
                     </Form.Item>
 
                     <Form.Item label={t('settings.smtpUseTls')} name="smtpUseTls" valuePropName="checked">

@@ -8,6 +8,8 @@ import { NewInvoicePage } from './pages/NewInvoicePage';
 import { InvoiceViewPage } from './pages/InvoiceViewPage';
 import { ClientsPage } from './pages/ClientsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { OverviewPage } from './pages/OverviewPage';
+import { ExpensesPage } from './pages/ExpensesPage';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import i18n, { normalizeLanguage } from './i18n';
@@ -63,6 +65,8 @@ export default function App() {
               }
             />
             <Route index element={<InvoicesPage />} />
+            <Route path="overview" element={<OverviewPage />} />
+            <Route path="expenses" element={<ExpensesPage />} />
             <Route path="invoices/new" element={<NewInvoicePage />} />
             <Route path="invoices/view/:id" element={<InvoiceViewPage />} />
             <Route path="clients" element={<ClientsPage />} />

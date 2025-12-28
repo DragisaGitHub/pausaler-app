@@ -145,7 +145,7 @@ export function InvoiceViewPage() {
   const openSendEmail = () => {
     sendEmailForm.setFieldsValue({
       to: clientEmail,
-      subject: t('invoiceEmail.defaultSubject', { number: invoice.invoiceNumber }),
+      subject: t('invoiceEmail.defaultSubject', { invoiceNumber: invoice.invoiceNumber }),
       body: '',
       includePdf: true,
     });

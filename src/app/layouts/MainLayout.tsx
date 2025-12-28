@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Layout, Menu, theme } from 'antd';
-import { FileTextOutlined, UserOutlined, SettingOutlined, DashboardOutlined } from '@ant-design/icons';
+import { FileTextOutlined, UserOutlined, SettingOutlined, DashboardOutlined, BarChartOutlined, DollarOutlined } from '@ant-design/icons';
 import { Link, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -18,12 +18,26 @@ export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
     return <Navigate to="/setup" replace />;
   }
 
+  const selectedKey = location.pathname.startsWith('/invoices/') ? '/' : location.pathname;
+
   const menuItems = [
     {
       key: '/',
       icon: <DashboardOutlined />,
       disabled: needsSetup,
       label: needsSetup ? <span>{t('nav.invoices')}</span> : <Link to="/">{t('nav.invoices')}</Link>,
+    },
+    {
+      key: '/overview',
+      icon: <BarChartOutlined />,
+      disabled: needsSetup,
+      label: needsSetup ? <span>{t('nav.overview')}</span> : <Link to="/overview">{t('nav.overview')}</Link>,
+    },
+    {
+      key: '/expenses',
+      icon: <DollarOutlined />,
+      disabled: needsSetup,
+      label: needsSetup ? <span>{t('nav.expenses')}</span> : <Link to="/expenses">{t('nav.expenses')}</Link>,
     },
     {
       key: '/clients',
@@ -77,7 +91,7 @@ export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
         <Menu
           theme="dark"
           mode="inline"
-          selectedKeys={[location.pathname]}
+          selectedKeys={[selectedKey]}
           items={menuItems}
           style={{ borderRight: 0 }}
         />

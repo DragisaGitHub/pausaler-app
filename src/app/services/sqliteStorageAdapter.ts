@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
 import type { StorageAdapter } from './storageAdapter';
-import type { Client, Invoice, Settings } from '../types';
+import type { Client, Expense, ExpenseRange, Invoice, Settings } from '../types';
 
 type NewInvoice = {
   clientId: string;
@@ -86,6 +86,21 @@ export function createSqliteStorageAdapter(): StorageAdapter {
 
     deleteInvoice: async (id: string): Promise<boolean> =>
       invokeLogged<boolean>('deleteInvoice', 'delete_invoice', { id }),
+
+    // Expenses
+    listExpenses: async (range?: ExpenseRange): Promise<Expense[]> =>
+      invokeLogged<Expense[]>('listExpenses', 'list_expenses', { range: range ?? null }),
+
+    createExpense: async (data: Omit<Expense, 'id' | 'createdAt'>): Promise<Expense> =>
+      invokeLogged<Expense>('createExpense', 'create_expense', { input: data }),
+
+    updateExpense: async (id: string, patch: Partial<Omit<Expense, 'id' | 'createdAt'>>): Promise<Expense | null> => {
+      const res = await invokeLogged<Expense | null>('updateExpense', 'update_expense', { id, patch });
+      return res ?? null;
+    },
+
+    deleteExpense: async (id: string): Promise<boolean> =>
+      invokeLogged<boolean>('deleteExpense', 'delete_expense', { id }),
 
     // Email
     sendInvoiceEmail: async (input: {
