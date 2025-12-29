@@ -705,6 +705,42 @@ fn push_line_right(
     push_line(layer, font, text, font_size, x, y);
 }
 
+fn text_width_mm_ttf(face: &ttf_parser::Face<'_>, text: &str, font_size_pt: f32) -> f32 {
+    // PDF font sizes are in points; our coordinates are in millimeters.
+    const PT_TO_MM: f32 = 25.4 / 72.0;
+    let units_per_em = face.units_per_em() as f32;
+    if units_per_em <= 0.0 {
+        return 0.0;
+    }
+
+    let mut width_units: i32 = 0;
+
+    for ch in text.chars() {
+        let Some(gid) = face.glyph_index(ch) else {
+            continue;
+        };
+
+        width_units += face.glyph_hor_advance(gid).unwrap_or(0) as i32;
+    }
+
+    let width_pt = (width_units as f32 / units_per_em) * font_size_pt;
+    width_pt * PT_TO_MM
+}
+
+fn push_line_right_measured(
+    layer: &printpdf::PdfLayerReference,
+    font: &printpdf::IndirectFontRef,
+    ttf_face: &ttf_parser::Face<'_>,
+    text: &str,
+    font_size: f32,
+    x_right: f32,
+    y: f32,
+) {
+    let width_mm = text_width_mm_ttf(ttf_face, text, font_size);
+    let x = (x_right - width_mm).max(0.0);
+    push_line(layer, font, text, font_size, x, y);
+}
+
 fn split_and_wrap_lines(input: &str, max_chars: usize) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for raw in input.lines() {
@@ -845,11 +881,16 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
     let layer = doc.get_page(page1).get_layer(layer1);
 
     // Embed a Unicode font to support Cyrillic (ћирилица) and other non-ASCII characters.
+    static FONT_BYTES: &[u8] = include_bytes!("../assets/DejaVuSans.ttf");
     let font = doc
-        .add_external_font(Cursor::new(include_bytes!("../assets/DejaVuSans.ttf") as &[u8]))
+        .add_external_font(Cursor::new(FONT_BYTES as &[u8]))
         .map_err(|e| e.to_string())?;
     // Use the same embedded font for all text to ensure consistent Unicode rendering.
     let font_bold = font.clone();
+
+    // Parse the same embedded font for deterministic text width measurement (used for true right-alignment).
+    let ttf_face = ttf_parser::Face::parse(FONT_BYTES, 0)
+        .map_err(|_| "Failed to parse embedded font for measurement".to_string())?;
 
     // Layout constants (language-agnostic)
     const PAGE_W: f32 = 210.0;
@@ -873,6 +914,26 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
     const LABEL_COL_W: f32 = 36.0;
     #[allow(unused)]
     const HEADER_LABEL_COL_W: f32 = 38.0;
+
+    // Cell padding (avoid scattered magic numbers)
+    const CELL_PAD_X: f32 = 1.2;
+    const CELL_PAD_Y: f32 = 3.0;
+
+    // Debug-only visual verification switch (make padding changes obvious in generated PDFs).
+    const DEBUG_PDF_LAYOUT_EXAGGERATE: bool = cfg!(debug_assertions) && false;
+    const DEBUG_CELL_PAD_X: f32 = 8.0;
+    const DEBUG_CELL_PAD_Y: f32 = 6.0;
+
+    let cell_pad_x = if DEBUG_PDF_LAYOUT_EXAGGERATE {
+        DEBUG_CELL_PAD_X
+    } else {
+        CELL_PAD_X
+    };
+    let cell_pad_y = if DEBUG_PDF_LAYOUT_EXAGGERATE {
+        DEBUG_CELL_PAD_Y
+    } else {
+        CELL_PAD_Y
+    };
 
     let content_left_x = PAGE_MARGIN_X;
     let content_right_x = PAGE_W - PAGE_MARGIN_X;
@@ -1024,7 +1085,8 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
     push_line(&layer, &font_bold, &labels.col_qty, header_size, col_qty_left, y);
     push_line(&layer, &font_bold, &labels.col_unit_price, header_size, col_price_left, y);
     push_line(&layer, &font_bold, &labels.col_discount, header_size, col_disc_left, y);
-    push_line(&layer, &font_bold, &labels.col_amount, header_size, col_total_left, y);
+    let numeric_right_x = col_total_right - cell_pad_x;
+    push_line_right_measured(&layer, &font_bold, &ttf_face, &labels.col_amount, header_size, numeric_right_x, y);
     y -= 6.0;
     draw_rule_with_thickness(&layer, table_left, table_right, y, 0.60);
     y -= 7.8;
@@ -1060,7 +1122,7 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
         let line_discount = it.discount_amount.unwrap_or(0.0).clamp(0.0, line_subtotal);
         let line_total = line_subtotal - line_discount;
         push_line_right(&layer, &font, &fmt_money(line_discount), text_size, col_disc_right, row_top_y);
-        push_line_right(&layer, &font_bold, &fmt_money(line_total), text_size, col_total_right, row_top_y);
+        push_line_right_measured(&layer, &font_bold, &ttf_face, &fmt_money(line_total), text_size, numeric_right_x, row_top_y);
 
         let mut row_h_used = 0.0;
         for extra in desc_lines.iter().skip(1) {
@@ -1095,12 +1157,14 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
     // Vertically centered baselines inside each row
     // Tie labels to the left-most table grid boundary (description column left) with existing grid spacing.
     let label_x = col_service_left + col_gap;
-    // IMPORTANT: use the exact same numeric right edge as the table TOTAL column.
-    let value_right = col_total_right;
-    let baseline_offset = 2.6;
-    let row1_y = totals_top_y - baseline_offset;
-    let row2_y = totals_top_y - totals_row_h - baseline_offset;
-    let row3_y = totals_top_y - 2.0 * totals_row_h - baseline_offset;
+    // IMPORTANT: use the exact same numeric right edge as the table TOTAL column, with cell padding.
+    let value_right = numeric_right_x;
+    let row1_top_y = totals_top_y;
+    let row2_top_y = totals_top_y - totals_row_h;
+    let row3_top_y = totals_top_y - 2.0 * totals_row_h;
+    let row1_y = row1_top_y - cell_pad_y;
+    let row2_y = row2_top_y - cell_pad_y;
+    let row3_y = row3_top_y - cell_pad_y;
 
     let totals_label_size = 8.8;
     let totals_value_size = 9.3;
@@ -1115,9 +1179,10 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
         label_x,
         row1_y,
     );
-    push_line_right(
+    push_line_right_measured(
         &layer,
         &font_bold,
+        &ttf_face,
         &fmt_money(payload.subtotal),
         totals_value_size,
         value_right,
@@ -1132,9 +1197,10 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
         label_x,
         row2_y,
     );
-    push_line_right(
+    push_line_right_measured(
         &layer,
         &font_bold,
+        &ttf_face,
         &fmt_money(payload.discount_total),
         totals_value_size,
         value_right,
@@ -1150,9 +1216,10 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
         row3_y,
     );
     let total_due = payload.subtotal - payload.discount_total;
-    push_line_right(
+    push_line_right_measured(
         &layer,
         &font_bold,
+        &ttf_face,
         &fmt_money(total_due),
         totals_emph_value_size,
         value_right,
@@ -1161,8 +1228,6 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
 
     // Box lines
     draw_rule_with_thickness(&layer, totals_left, totals_box_right, totals_top_y, 0.85);
-    draw_rule_with_thickness(&layer, totals_left, totals_box_right, totals_top_y - totals_row_h, 0.85);
-    draw_rule_with_thickness(&layer, totals_left, totals_box_right, totals_top_y - 2.0 * totals_row_h, 0.85);
     draw_rule_with_thickness(&layer, totals_left, totals_box_right, totals_top_y - 3.0 * totals_row_h, 0.85);
 
     y = totals_top_y - 3.0 * totals_row_h - 7.0;
