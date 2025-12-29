@@ -690,6 +690,7 @@ fn draw_rule_with_thickness(
     });
 }
 
+#[allow(dead_code)]
 fn push_line_right(
     layer: &printpdf::PdfLayerReference,
     font: &printpdf::IndirectFontRef,
@@ -783,6 +784,7 @@ fn format_qty_sr(v: f64) -> String {
     s.replace('.', ",")
 }
 
+#[allow(dead_code)]
 fn fill_rect_gray(
     layer: &printpdf::PdfLayerReference,
     x: f32,
@@ -1062,9 +1064,44 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
     let col_gap = 3.0;
     let col_unit_w = 16.0;
     let col_qty_w = 18.0;
-    let col_price_w = 24.0;
-    let col_disc_w = 20.0;
-    let col_total_w = 26.0;
+    let col_price_w_base = 24.0;
+    let col_disc_w_base = 20.0;
+    let col_total_w_base = 26.0;
+
+    // RABAT is almost always 0,00 -> keep it compact, but ensure header + a typical value fit.
+    // Also ensure CENA and TOTAL can comfortably render large values (e.g., 200.000,00 / 200,000.00).
+    let sample_discount = fmt_money(0.0);
+    let sample_big_money = fmt_money(200000.0);
+
+    let header_size_measure: f32 = 8.6;
+
+    let min_disc_w = text_width_mm_ttf(&ttf_face, &labels.col_discount, header_size_measure)
+        .max(text_width_mm_ttf(&ttf_face, &sample_discount, text_size))
+        + 2.0 * cell_pad_x;
+
+    let min_price_w = text_width_mm_ttf(&ttf_face, &labels.col_unit_price, header_size_measure)
+        .max(text_width_mm_ttf(&ttf_face, &sample_big_money, text_size))
+        + 2.0 * cell_pad_x;
+
+    let min_total_w = text_width_mm_ttf(&ttf_face, &labels.col_amount, header_size_measure)
+        .max(text_width_mm_ttf(&ttf_face, &sample_big_money, text_size))
+        + 2.0 * cell_pad_x;
+
+    // Apply requested reallocation:
+    // - shrink RABAT to its minimum
+    // - use the freed width primarily for CENA
+    // - allow TOTAL to grow if needed to fit the large-value sample
+    let col_disc_w = min_disc_w;
+    let freed_from_disc = (col_disc_w_base - col_disc_w).max(0.0);
+    let available_for_price_total = col_price_w_base + col_total_w_base + freed_from_disc;
+
+    let col_total_w = col_total_w_base.max(min_total_w);
+    let mut col_price_w = col_price_w_base.max(min_price_w);
+    let used_by_price_total = col_price_w + col_total_w;
+    if used_by_price_total < available_for_price_total {
+        // Give any remaining width to CENA (primary beneficiary).
+        col_price_w += available_for_price_total - used_by_price_total;
+    }
 
     let col_total_right = table_right - 0.5;
     let col_total_left = col_total_right - col_total_w;
@@ -1078,21 +1115,40 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
     let col_unit_left = col_unit_right - col_unit_w;
     let col_service_left = table_left;
 
-    // Header row (authority)
+    // Header row (authority) — anchor to the same grid as row values
     let header_size = 8.6;
-    push_line(&layer, &font_bold, &labels.col_description, header_size, col_service_left, y);
-    push_line(&layer, &font_bold, &labels.col_unit, header_size, col_unit_left, y);
-    push_line(&layer, &font_bold, &labels.col_qty, header_size, col_qty_left, y);
-    push_line(&layer, &font_bold, &labels.col_unit_price, header_size, col_price_left, y);
-    push_line(&layer, &font_bold, &labels.col_discount, header_size, col_disc_left, y);
+    let service_header_x = col_service_left;
+    let unit_header_x = col_unit_left;
+    let qty_right_x = col_qty_right - cell_pad_x;
+    let price_right_x = col_price_right - cell_pad_x;
+    let disc_right_x = col_disc_right - cell_pad_x;
     let numeric_right_x = col_total_right - cell_pad_x;
+
+    push_line(&layer, &font_bold, &labels.col_description, header_size, service_header_x, y);
+    push_line(&layer, &font_bold, &labels.col_unit, header_size, unit_header_x, y);
+    push_line_right_measured(&layer, &font_bold, &ttf_face, &labels.col_qty, header_size, qty_right_x, y);
+    push_line_right_measured(
+        &layer,
+        &font_bold,
+        &ttf_face,
+        &labels.col_unit_price,
+        header_size,
+        price_right_x,
+        y,
+    );
+    push_line_right_measured(&layer, &font_bold, &ttf_face, &labels.col_discount, header_size, disc_right_x, y);
     push_line_right_measured(&layer, &font_bold, &ttf_face, &labels.col_amount, header_size, numeric_right_x, y);
     y -= 6.0;
     draw_rule_with_thickness(&layer, table_left, table_right, y, 0.60);
     y -= 7.8;
 
     // Rows
-    for it in payload.items.iter() {
+    // Reduce vertical spacing between rows (~50%) without affecting header spacing
+    // or the last-row → totals spacing.
+    let row_advance_base: f32 = 10.6;
+    let row_advance_tight: f32 = row_advance_base * 0.5;
+
+    for (row_idx, it) in payload.items.iter().enumerate() {
         // Keep some reserved space for totals + blocks below.
         if y < footer_note_bottom_y + 75.0 {
             return Err(labels.err_too_many_items.clone());
@@ -1116,12 +1172,12 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
         }
 
         // Qty/Price/Discount/Total
-        push_line_right(&layer, &font, &fmt_qty(it.quantity), text_size, col_qty_right, row_top_y);
-        push_line_right(&layer, &font, &fmt_money(it.unit_price), text_size, col_price_right, row_top_y);
+        push_line_right_measured(&layer, &font, &ttf_face, &fmt_qty(it.quantity), text_size, qty_right_x, row_top_y);
+        push_line_right_measured(&layer, &font, &ttf_face, &fmt_money(it.unit_price), text_size, price_right_x, row_top_y);
         let line_subtotal = it.quantity * it.unit_price;
         let line_discount = it.discount_amount.unwrap_or(0.0).clamp(0.0, line_subtotal);
         let line_total = line_subtotal - line_discount;
-        push_line_right(&layer, &font, &fmt_money(line_discount), text_size, col_disc_right, row_top_y);
+        push_line_right_measured(&layer, &font, &ttf_face, &fmt_money(line_discount), text_size, disc_right_x, row_top_y);
         push_line_right_measured(&layer, &font_bold, &ttf_face, &fmt_money(line_total), text_size, numeric_right_x, row_top_y);
 
         let mut row_h_used = 0.0;
@@ -1130,11 +1186,13 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
             push_line(&layer, &font, extra, text_size, col_service_left, row_top_y - row_h_used);
         }
 
-        // Advance to next row (rows should breathe)
-        y = row_top_y - 10.6 - row_h_used;
+        // Advance to next row (tighten only between rows)
+        let is_last_row = row_idx + 1 == payload.items.len();
+        let row_advance = if is_last_row { row_advance_base } else { row_advance_tight };
+        y = row_top_y - row_advance - row_h_used;
     }
 
-    // Table bottom rule
+    // Table bottom rule (end-of-items separator)
     y += 1.2;
     draw_rule_with_thickness(&layer, table_left, table_right, y, 0.40);
     y -= 7.2;
@@ -1146,13 +1204,10 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
     let totals_pad: f32 = 0.5;
     let totals_box_right = col_total_right + totals_pad;
     let totals_row_h = 7.6;
-    let totals_w = totals_box_right - totals_left;
+    let _totals_w = totals_box_right - totals_left;
 
-    // light stripe backgrounds (exact box width)
+    // Totals background: plain white (no stripe fills)
     let totals_top_y = y + 3.0;
-    fill_rect_gray(&layer, totals_left, totals_top_y, totals_w, totals_row_h, 0.90);
-    fill_rect_gray(&layer, totals_left, totals_top_y - totals_row_h, totals_w, totals_row_h, 1.0);
-    fill_rect_gray(&layer, totals_left, totals_top_y - 2.0 * totals_row_h, totals_w, totals_row_h, 0.90);
 
     // Vertically centered baselines inside each row
     // Tie labels to the left-most table grid boundary (description column left) with existing grid spacing.
@@ -1227,7 +1282,7 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
     );
 
     // Box lines
-    draw_rule_with_thickness(&layer, totals_left, totals_box_right, totals_top_y, 0.85);
+    // Remove the totals top border to avoid a rule visually sticking to the first totals row.
     draw_rule_with_thickness(&layer, totals_left, totals_box_right, totals_top_y - 3.0 * totals_row_h, 0.85);
 
     y = totals_top_y - 3.0 * totals_row_h - 7.0;
