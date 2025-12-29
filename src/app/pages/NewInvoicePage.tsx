@@ -22,7 +22,16 @@ import {
 import { useNavigate, useLocation } from 'react-router-dom';
 import dayjs from 'dayjs';
 
-import { Invoice, InvoiceItem, Client, CURRENCY_VALUES } from '../types';
+import {
+  Client,
+  CURRENCY_VALUES,
+  Invoice,
+  INVOICE_UNIT_VALUES,
+  InvoiceItem,
+  InvoiceUnit,
+  invoiceUnitLabel,
+  normalizeInvoiceUnit,
+} from '../types';
 import { getStorage } from '../services/storageProvider';
 import { useTranslation } from 'react-i18next';
 import { getNumberLocale, normalizeLanguage } from '../i18n';
@@ -66,7 +75,7 @@ export function NewInvoicePage() {
 
   const normalizeItems = (rawItems: InvoiceItem[]): InvoiceItem[] =>
     rawItems.map((it) => {
-      const unit = it.unit ?? '';
+      const unit = normalizeInvoiceUnit((it as any).unit);
       const discountAmount = it.discountAmount == null ? undefined : Number(it.discountAmount);
       const quantity = Number(it.quantity || 0);
       const unitPrice = Number(it.unitPrice || 0);
@@ -156,7 +165,7 @@ export function NewInvoicePage() {
     const newItem: InvoiceItem = {
       id: Date.now().toString(),
       description: '',
-      unit: '',
+      unit: 'kom',
       quantity: 1,
       unitPrice: 0,
       discountAmount: undefined,
@@ -332,9 +341,11 @@ export function NewInvoicePage() {
       key: 'unit',
       width: '12%',
       render: (_: string, record: InvoiceItem) => (
-        <Input
+        <Select<InvoiceUnit>
           value={record.unit}
-          onChange={(e) => handleItemChange(record.id, 'unit', e.target.value)}
+          onChange={(value) => handleItemChange(record.id, 'unit', value)}
+          options={INVOICE_UNIT_VALUES.map((u) => ({ value: u, label: invoiceUnitLabel(u) }))}
+          style={{ width: '100%' }}
         />
       ),
     },

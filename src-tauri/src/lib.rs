@@ -690,6 +690,7 @@ fn draw_rule_with_thickness(
     });
 }
 
+#[allow(dead_code)]
 fn push_line_right(
     layer: &printpdf::PdfLayerReference,
     font: &printpdf::IndirectFontRef,
@@ -702,6 +703,42 @@ fn push_line_right(
     // This is good enough for numeric columns and matches the reference visually.
     let width_est = (text.chars().count() as f32) * font_size * 0.42;
     let x = (x_right - width_est).max(0.0);
+    push_line(layer, font, text, font_size, x, y);
+}
+
+fn text_width_mm_ttf(face: &ttf_parser::Face<'_>, text: &str, font_size_pt: f32) -> f32 {
+    // PDF font sizes are in points; our coordinates are in millimeters.
+    const PT_TO_MM: f32 = 25.4 / 72.0;
+    let units_per_em = face.units_per_em() as f32;
+    if units_per_em <= 0.0 {
+        return 0.0;
+    }
+
+    let mut width_units: i32 = 0;
+
+    for ch in text.chars() {
+        let Some(gid) = face.glyph_index(ch) else {
+            continue;
+        };
+
+        width_units += face.glyph_hor_advance(gid).unwrap_or(0) as i32;
+    }
+
+    let width_pt = (width_units as f32 / units_per_em) * font_size_pt;
+    width_pt * PT_TO_MM
+}
+
+fn push_line_right_measured(
+    layer: &printpdf::PdfLayerReference,
+    font: &printpdf::IndirectFontRef,
+    ttf_face: &ttf_parser::Face<'_>,
+    text: &str,
+    font_size: f32,
+    x_right: f32,
+    y: f32,
+) {
+    let width_mm = text_width_mm_ttf(ttf_face, text, font_size);
+    let x = (x_right - width_mm).max(0.0);
     push_line(layer, font, text, font_size, x, y);
 }
 
@@ -747,6 +784,7 @@ fn format_qty_sr(v: f64) -> String {
     s.replace('.', ",")
 }
 
+#[allow(dead_code)]
 fn fill_rect_gray(
     layer: &printpdf::PdfLayerReference,
     x: f32,
@@ -799,8 +837,9 @@ fn push_kv_wrapped(
     current_y
 }
 
-fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
-    use printpdf::{Mm, PdfDocument};
+fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Result<Vec<u8>, String> {
+    use printpdf::{Image, ImageTransform, Mm, PdfDocument};
+    use base64::Engine as _;
 
     // Language selection must be explicit (no implicit Serbian fallback).
     let lang_raw = payload.language.as_deref().map(str::trim).filter(|s| !s.is_empty());
@@ -845,11 +884,16 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
     let layer = doc.get_page(page1).get_layer(layer1);
 
     // Embed a Unicode font to support Cyrillic (ћирилица) and other non-ASCII characters.
+    static FONT_BYTES: &[u8] = include_bytes!("../assets/DejaVuSans.ttf");
     let font = doc
-        .add_external_font(Cursor::new(include_bytes!("../assets/DejaVuSans.ttf") as &[u8]))
+        .add_external_font(Cursor::new(FONT_BYTES as &[u8]))
         .map_err(|e| e.to_string())?;
     // Use the same embedded font for all text to ensure consistent Unicode rendering.
     let font_bold = font.clone();
+
+    // Parse the same embedded font for deterministic text width measurement (used for true right-alignment).
+    let ttf_face = ttf_parser::Face::parse(FONT_BYTES, 0)
+        .map_err(|_| "Failed to parse embedded font for measurement".to_string())?;
 
     // Layout constants (language-agnostic)
     const PAGE_W: f32 = 210.0;
@@ -873,6 +917,26 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
     const LABEL_COL_W: f32 = 36.0;
     #[allow(unused)]
     const HEADER_LABEL_COL_W: f32 = 38.0;
+
+    // Cell padding (avoid scattered magic numbers)
+    const CELL_PAD_X: f32 = 1.2;
+    const CELL_PAD_Y: f32 = 3.0;
+
+    // Debug-only visual verification switch (make padding changes obvious in generated PDFs).
+    const DEBUG_PDF_LAYOUT_EXAGGERATE: bool = cfg!(debug_assertions) && false;
+    const DEBUG_CELL_PAD_X: f32 = 8.0;
+    const DEBUG_CELL_PAD_Y: f32 = 6.0;
+
+    let cell_pad_x = if DEBUG_PDF_LAYOUT_EXAGGERATE {
+        DEBUG_CELL_PAD_X
+    } else {
+        CELL_PAD_X
+    };
+    let cell_pad_y = if DEBUG_PDF_LAYOUT_EXAGGERATE {
+        DEBUG_CELL_PAD_Y
+    } else {
+        CELL_PAD_Y
+    };
 
     let content_left_x = PAGE_MARGIN_X;
     let content_right_x = PAGE_W - PAGE_MARGIN_X;
@@ -899,30 +963,136 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
     // Flowing cursor
     let mut y = PAGE_H - PAGE_MARGIN_TOP;
 
+    // Document title block (ABOVE the top rule).
+    // Keep this as a single tunable constant so we can shift the entire header down
+    // without changing the internal alignment of the issuer/buyer columns.
+    const TITLE_BLOCK_H: f32 = 14.0;
+    const TITLE_TOP_PAD: f32 = 1.5;
+    let doc_title = "FAKTURA";
+    let doc_title_size: f32 = 14.0;
+    let doc_title_w = text_width_mm_ttf(&ttf_face, doc_title, doc_title_size);
+    let doc_title_x = content_left_x + (content_width - doc_title_w) / 2.0;
+    let doc_title_y = y - TITLE_TOP_PAD;
+    push_line(&layer, &font_bold, doc_title, doc_title_size, doc_title_x, doc_title_y);
+
+    // Shift the header block down; the top rule becomes the separator UNDER the title.
+    y -= TITLE_BLOCK_H;
+
     // Top horizontal rule (as in reference)
     draw_rule_with_thickness(&layer, content_left_x, content_right_x, y, 0.85);
     y -= 8.5;
 
     // A) Parties block (two columns)
-    let left_x = content_left_x;
+    // Optional company logo:
+    // - when present, render in top-left header area
+    // - shift issuer block X to the right of the logo
+    // - keep Y flow unchanged so downstream layout (rules/table/totals) stays identical
+    const LOGO_GAP_X: f32 = 4.0;
+    const LOGO_DPI: f32 = 300.0;
+
+    let left_col_right_x = content_left_x + (content_width / 2.0);
+    let left_col_w_orig = left_col_right_x - content_left_x;
+
+    // Decode a data URL logo (as stored from the UI: data:image/*;base64,...) into an image.
+    let decoded_logo = logo_url
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| {
+            let lower = s.to_ascii_lowercase();
+            if !lower.starts_with("data:") {
+                return None;
+            }
+            let comma = s.find(',')?;
+            let (meta, data) = s.split_at(comma);
+            if !meta.to_ascii_lowercase().contains(";base64") {
+                return None;
+            }
+            let b64 = &data[1..];
+            let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+            let img = printpdf::image_crate::load_from_memory(&bytes).ok()?;
+            Some(img)
+        });
+
+    // Compute issuer anchor X. Default is the original (no-logo) anchor.
+    let mut issuer_left_x = content_left_x;
+
     let right_x = content_left_x + (content_width / 2.0) + 4.0;
     let title_size = 10.0;
     let name_size = 11.0;
     let text_size = 8.3;
     let line_h = 4.0;
 
+    // If we have a logo:
+    // - align its TOP to the same Y as the "Od:" label (issuer_top_y)
+    // - align its BOTTOM to the same Y as the last issuer line ("Tekući račun")
+    // - scale UP/DOWN to fill that exact height (no vertical centering, no size caps)
+    // Then shift the issuer block to the right: logo_right_x + LOGO_GAP_X.
+    if let Some(img) = decoded_logo {
+        let px_w = img.width().max(1) as f32;
+        let px_h = img.height().max(1) as f32;
+
+        let natural_w_mm = px_w / LOGO_DPI * 25.4;
+        let natural_h_mm = px_h / LOGO_DPI * 25.4;
+        let issuer_top_y = y;
+        let y_after_titles = y - 5.0;
+
+        let addr_chars_for_issuer_left_x = |issuer_left_x: f32| {
+            let left_col_w_now = (left_col_right_x - issuer_left_x).max(10.0);
+            ((42.0 * (left_col_w_now / left_col_w_orig)).floor() as usize).clamp(20, 42)
+        };
+
+        // Fixed-point iteration: wrapping -> issuer height -> logo scale -> logo width -> wrapping.
+        let mut logo_w_mm = natural_w_mm;
+        let mut scale = 1.0_f32;
+        let mut issuer_last_line_y = y_after_titles;
+
+        for _ in 0..3 {
+            let next_issuer_left_x = content_left_x + logo_w_mm + LOGO_GAP_X;
+            let addr_chars = addr_chars_for_issuer_left_x(next_issuer_left_x);
+            let addr_lines = split_and_wrap_lines(&payload.company.address, addr_chars);
+
+            // Last issuer line baseline (Tekući račun) based on existing layout steps.
+            issuer_last_line_y = y_after_titles - 4.6 - (addr_lines.len() as f32) * line_h - 2.0 * line_h;
+            let issuer_block_h = issuer_top_y - issuer_last_line_y;
+
+            scale = issuer_block_h / natural_h_mm;
+            logo_w_mm = natural_w_mm * scale;
+        }
+
+        issuer_left_x = content_left_x + logo_w_mm + LOGO_GAP_X;
+
+        // Draw logo so its top aligns to issuer_top_y and its bottom aligns to the last issuer line.
+        let logo_bottom_y = issuer_last_line_y;
+        let image = Image::from_dynamic_image(&img);
+        image.add_to_layer(
+            layer.clone(),
+            ImageTransform {
+                translate_x: Some(Mm(content_left_x)),
+                translate_y: Some(Mm(logo_bottom_y)),
+                rotate: None,
+                scale_x: Some(scale),
+                scale_y: Some(scale),
+                dpi: Some(LOGO_DPI),
+            },
+        );
+    }
+
     // Visual hierarchy: strong section titles; names bold; details regular.
-    push_line(&layer, &font_bold, &labels.issuer_title, title_size, left_x, y);
+    push_line(&layer, &font_bold, &labels.issuer_title, title_size, issuer_left_x, y);
     push_line(&layer, &font_bold, &labels.buyer_title, title_size, right_x, y);
     y -= 5.0;
 
     // Left column: issuer
     let mut y_left = y;
-    push_line(&layer, &font_bold, &payload.company.company_name, name_size, left_x, y_left);
+    push_line(&layer, &font_bold, &payload.company.company_name, name_size, issuer_left_x, y_left);
     y_left -= 4.6;
 
-    for line in split_and_wrap_lines(&payload.company.address, 42) {
-        push_line(&layer, &font, &line, text_size, left_x, y_left);
+    let issuer_addr_max_chars = {
+        let left_col_w_now = (left_col_right_x - issuer_left_x).max(10.0);
+        ((42.0 * (left_col_w_now / left_col_w_orig)).floor() as usize).clamp(20, 42)
+    };
+    for line in split_and_wrap_lines(&payload.company.address, issuer_addr_max_chars) {
+        push_line(&layer, &font, &line, text_size, issuer_left_x, y_left);
         y_left -= line_h;
     }
     // PIB
@@ -931,7 +1101,7 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
         &font,
         &format!("{}: {}", &labels.vat_id, &payload.company.pib),
         text_size,
-        left_x,
+        issuer_left_x,
         y_left,
     );
     y_left -= line_h;
@@ -941,7 +1111,7 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
         &font,
         &format!("{}: {}", &labels.registration_number, &payload.company.registration_number),
         text_size,
-        left_x,
+        issuer_left_x,
         y_left,
     );
     y_left -= line_h;
@@ -951,7 +1121,7 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
         &font,
         &format!("{}: {}", &labels.bank_account, &payload.company.bank_account),
         text_size,
-        left_x,
+        issuer_left_x,
         y_left,
     );
     y_left -= line_h;
@@ -1001,9 +1171,44 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
     let col_gap = 3.0;
     let col_unit_w = 16.0;
     let col_qty_w = 18.0;
-    let col_price_w = 24.0;
-    let col_disc_w = 20.0;
-    let col_total_w = 26.0;
+    let col_price_w_base = 24.0;
+    let col_disc_w_base = 20.0;
+    let col_total_w_base = 26.0;
+
+    // RABAT is almost always 0,00 -> keep it compact, but ensure header + a typical value fit.
+    // Also ensure CENA and TOTAL can comfortably render large values (e.g., 200.000,00 / 200,000.00).
+    let sample_discount = fmt_money(0.0);
+    let sample_big_money = fmt_money(200000.0);
+
+    let header_size_measure: f32 = 8.6;
+
+    let min_disc_w = text_width_mm_ttf(&ttf_face, &labels.col_discount, header_size_measure)
+        .max(text_width_mm_ttf(&ttf_face, &sample_discount, text_size))
+        + 2.0 * cell_pad_x;
+
+    let min_price_w = text_width_mm_ttf(&ttf_face, &labels.col_unit_price, header_size_measure)
+        .max(text_width_mm_ttf(&ttf_face, &sample_big_money, text_size))
+        + 2.0 * cell_pad_x;
+
+    let min_total_w = text_width_mm_ttf(&ttf_face, &labels.col_amount, header_size_measure)
+        .max(text_width_mm_ttf(&ttf_face, &sample_big_money, text_size))
+        + 2.0 * cell_pad_x;
+
+    // Apply requested reallocation:
+    // - shrink RABAT to its minimum
+    // - use the freed width primarily for CENA
+    // - allow TOTAL to grow if needed to fit the large-value sample
+    let col_disc_w = min_disc_w;
+    let freed_from_disc = (col_disc_w_base - col_disc_w).max(0.0);
+    let available_for_price_total = col_price_w_base + col_total_w_base + freed_from_disc;
+
+    let col_total_w = col_total_w_base.max(min_total_w);
+    let mut col_price_w = col_price_w_base.max(min_price_w);
+    let used_by_price_total = col_price_w + col_total_w;
+    if used_by_price_total < available_for_price_total {
+        // Give any remaining width to CENA (primary beneficiary).
+        col_price_w += available_for_price_total - used_by_price_total;
+    }
 
     let col_total_right = table_right - 0.5;
     let col_total_left = col_total_right - col_total_w;
@@ -1017,20 +1222,40 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
     let col_unit_left = col_unit_right - col_unit_w;
     let col_service_left = table_left;
 
-    // Header row (authority)
+    // Header row (authority) — anchor to the same grid as row values
     let header_size = 8.6;
-    push_line(&layer, &font_bold, &labels.col_description, header_size, col_service_left, y);
-    push_line(&layer, &font_bold, &labels.col_unit, header_size, col_unit_left, y);
-    push_line(&layer, &font_bold, &labels.col_qty, header_size, col_qty_left, y);
-    push_line(&layer, &font_bold, &labels.col_unit_price, header_size, col_price_left, y);
-    push_line(&layer, &font_bold, &labels.col_discount, header_size, col_disc_left, y);
-    push_line(&layer, &font_bold, &labels.col_amount, header_size, col_total_left, y);
+    let service_header_x = col_service_left;
+    let unit_header_x = col_unit_left;
+    let qty_right_x = col_qty_right - cell_pad_x;
+    let price_right_x = col_price_right - cell_pad_x;
+    let disc_right_x = col_disc_right - cell_pad_x;
+    let numeric_right_x = col_total_right - cell_pad_x;
+
+    push_line(&layer, &font_bold, &labels.col_description, header_size, service_header_x, y);
+    push_line(&layer, &font_bold, &labels.col_unit, header_size, unit_header_x, y);
+    push_line_right_measured(&layer, &font_bold, &ttf_face, &labels.col_qty, header_size, qty_right_x, y);
+    push_line_right_measured(
+        &layer,
+        &font_bold,
+        &ttf_face,
+        &labels.col_unit_price,
+        header_size,
+        price_right_x,
+        y,
+    );
+    push_line_right_measured(&layer, &font_bold, &ttf_face, &labels.col_discount, header_size, disc_right_x, y);
+    push_line_right_measured(&layer, &font_bold, &ttf_face, &labels.col_amount, header_size, numeric_right_x, y);
     y -= 6.0;
     draw_rule_with_thickness(&layer, table_left, table_right, y, 0.60);
     y -= 7.8;
 
     // Rows
-    for it in payload.items.iter() {
+    // Reduce vertical spacing between rows (~50%) without affecting header spacing
+    // or the last-row → totals spacing.
+    let row_advance_base: f32 = 10.6;
+    let row_advance_tight: f32 = row_advance_base * 0.5;
+
+    for (row_idx, it) in payload.items.iter().enumerate() {
         // Keep some reserved space for totals + blocks below.
         if y < footer_note_bottom_y + 75.0 {
             return Err(labels.err_too_many_items.clone());
@@ -1046,21 +1271,32 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
             push_line(&layer, &font, first, text_size, col_service_left, row_top_y);
         }
 
-        // Unit
-        if let Some(unit) = &it.unit {
-            if !unit.trim().is_empty() {
-                push_line(&layer, &font, unit.trim(), text_size, col_unit_left, row_top_y);
+        // Unit (fallback for old invoices; always render a valid value)
+        let unit_display: &'static str = {
+            let raw = it.unit.as_deref().unwrap_or("").trim();
+            if raw.is_empty() {
+                "kom"
+            } else {
+                let lower = raw.to_ascii_lowercase();
+                match lower.as_str() {
+                    "kom" => "kom",
+                    "sat" | "h" => "sat",
+                    "m2" | "m²" | "m^2" => "m²",
+                    "usluga" => "usluga",
+                    _ => "usluga",
+                }
             }
-        }
+        };
+        push_line(&layer, &font, unit_display, text_size, col_unit_left, row_top_y);
 
         // Qty/Price/Discount/Total
-        push_line_right(&layer, &font, &fmt_qty(it.quantity), text_size, col_qty_right, row_top_y);
-        push_line_right(&layer, &font, &fmt_money(it.unit_price), text_size, col_price_right, row_top_y);
+        push_line_right_measured(&layer, &font, &ttf_face, &fmt_qty(it.quantity), text_size, qty_right_x, row_top_y);
+        push_line_right_measured(&layer, &font, &ttf_face, &fmt_money(it.unit_price), text_size, price_right_x, row_top_y);
         let line_subtotal = it.quantity * it.unit_price;
         let line_discount = it.discount_amount.unwrap_or(0.0).clamp(0.0, line_subtotal);
         let line_total = line_subtotal - line_discount;
-        push_line_right(&layer, &font, &fmt_money(line_discount), text_size, col_disc_right, row_top_y);
-        push_line_right(&layer, &font_bold, &fmt_money(line_total), text_size, col_total_right, row_top_y);
+        push_line_right_measured(&layer, &font, &ttf_face, &fmt_money(line_discount), text_size, disc_right_x, row_top_y);
+        push_line_right_measured(&layer, &font_bold, &ttf_face, &fmt_money(line_total), text_size, numeric_right_x, row_top_y);
 
         let mut row_h_used = 0.0;
         for extra in desc_lines.iter().skip(1) {
@@ -1068,11 +1304,13 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
             push_line(&layer, &font, extra, text_size, col_service_left, row_top_y - row_h_used);
         }
 
-        // Advance to next row (rows should breathe)
-        y = row_top_y - 10.6 - row_h_used;
+        // Advance to next row (tighten only between rows)
+        let is_last_row = row_idx + 1 == payload.items.len();
+        let row_advance = if is_last_row { row_advance_base } else { row_advance_tight };
+        y = row_top_y - row_advance - row_h_used;
     }
 
-    // Table bottom rule
+    // Table bottom rule (end-of-items separator)
     y += 1.2;
     draw_rule_with_thickness(&layer, table_left, table_right, y, 0.40);
     y -= 7.2;
@@ -1084,23 +1322,22 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
     let totals_pad: f32 = 0.5;
     let totals_box_right = col_total_right + totals_pad;
     let totals_row_h = 7.6;
-    let totals_w = totals_box_right - totals_left;
+    let _totals_w = totals_box_right - totals_left;
 
-    // light stripe backgrounds (exact box width)
+    // Totals background: plain white (no stripe fills)
     let totals_top_y = y + 3.0;
-    fill_rect_gray(&layer, totals_left, totals_top_y, totals_w, totals_row_h, 0.90);
-    fill_rect_gray(&layer, totals_left, totals_top_y - totals_row_h, totals_w, totals_row_h, 1.0);
-    fill_rect_gray(&layer, totals_left, totals_top_y - 2.0 * totals_row_h, totals_w, totals_row_h, 0.90);
 
     // Vertically centered baselines inside each row
     // Tie labels to the left-most table grid boundary (description column left) with existing grid spacing.
     let label_x = col_service_left + col_gap;
-    // IMPORTANT: use the exact same numeric right edge as the table TOTAL column.
-    let value_right = col_total_right;
-    let baseline_offset = 2.6;
-    let row1_y = totals_top_y - baseline_offset;
-    let row2_y = totals_top_y - totals_row_h - baseline_offset;
-    let row3_y = totals_top_y - 2.0 * totals_row_h - baseline_offset;
+    // IMPORTANT: use the exact same numeric right edge as the table TOTAL column, with cell padding.
+    let value_right = numeric_right_x;
+    let row1_top_y = totals_top_y;
+    let row2_top_y = totals_top_y - totals_row_h;
+    let row3_top_y = totals_top_y - 2.0 * totals_row_h;
+    let row1_y = row1_top_y - cell_pad_y;
+    let row2_y = row2_top_y - cell_pad_y;
+    let row3_y = row3_top_y - cell_pad_y;
 
     let totals_label_size = 8.8;
     let totals_value_size = 9.3;
@@ -1115,9 +1352,10 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
         label_x,
         row1_y,
     );
-    push_line_right(
+    push_line_right_measured(
         &layer,
         &font_bold,
+        &ttf_face,
         &fmt_money(payload.subtotal),
         totals_value_size,
         value_right,
@@ -1132,9 +1370,10 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
         label_x,
         row2_y,
     );
-    push_line_right(
+    push_line_right_measured(
         &layer,
         &font_bold,
+        &ttf_face,
         &fmt_money(payload.discount_total),
         totals_value_size,
         value_right,
@@ -1150,9 +1389,10 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
         row3_y,
     );
     let total_due = payload.subtotal - payload.discount_total;
-    push_line_right(
+    push_line_right_measured(
         &layer,
         &font_bold,
+        &ttf_face,
         &fmt_money(total_due),
         totals_emph_value_size,
         value_right,
@@ -1160,9 +1400,7 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
     );
 
     // Box lines
-    draw_rule_with_thickness(&layer, totals_left, totals_box_right, totals_top_y, 0.85);
-    draw_rule_with_thickness(&layer, totals_left, totals_box_right, totals_top_y - totals_row_h, 0.85);
-    draw_rule_with_thickness(&layer, totals_left, totals_box_right, totals_top_y - 2.0 * totals_row_h, 0.85);
+    // Remove the totals top border to avoid a rule visually sticking to the first totals row.
     draw_rule_with_thickness(&layer, totals_left, totals_box_right, totals_top_y - 3.0 * totals_row_h, 0.85);
 
     y = totals_top_y - 3.0 * totals_row_h - 7.0;
@@ -2766,7 +3004,7 @@ async fn send_invoice_email(
 
     let email = if include_pdf {
         let payload = build_invoice_pdf_payload_from_db(&invoice, client.as_ref(), &settings);
-        let pdf_bytes = generate_pdf_bytes(&payload)?;
+        let pdf_bytes = generate_pdf_bytes(&payload, Some(settings.logo_url.as_str()))?;
         let filename = sanitize_filename(&format!("{}.pdf", invoice.invoice_number));
 
         let attachment = Attachment::new(filename)
@@ -2804,8 +3042,19 @@ async fn send_invoice_email(
 }
 
 #[tauri::command]
-fn export_invoice_pdf_to_downloads(app: tauri::AppHandle, payload: InvoicePdfPayload) -> Result<String, String> {
-    let bytes = generate_pdf_bytes(&payload)?;
+async fn export_invoice_pdf_to_downloads(
+    state: tauri::State<'_, DbState>,
+    app: tauri::AppHandle,
+    payload: InvoicePdfPayload,
+) -> Result<String, String> {
+    let logo_url = state
+        .with_read("export_invoice_pdf_to_downloads_settings", move |conn| {
+            let settings = read_settings_from_conn(conn)?;
+            Ok(settings.logo_url)
+        })
+        .await?;
+    let logo_url = logo_url.trim().to_string();
+    let bytes = generate_pdf_bytes(&payload, if logo_url.is_empty() { None } else { Some(logo_url.as_str()) })?;
 
     let downloads_dir = app
         .path()
