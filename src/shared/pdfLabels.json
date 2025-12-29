@@ -1,0 +1,106 @@
+{
+  "sr": {
+    "docTitle": "Faktura",
+    "invoiceTitle": "FAKTURA",
+
+    "issuerTitle": "Od:",
+    "buyerTitle": "Komitent:",
+    "detailsTitle": "Detalji",
+
+    "vatId": "PIB",
+    "registrationNumber": "Matični broj",
+    "bankAccount": "Tekući račun",
+    "email": "E-mail",
+
+    "invoiceNumber": "Broj fakture",
+    "issueDate": "Datum izdavanja",
+    "serviceDate": "Datum prometa",
+    "placeOfService": "Mesto prometa",
+    "placeOfIssue": "Mesto izdavanja",
+    "currency": "Valuta",
+
+    "itemsTitle": "Stavke",
+    "colDescription": "VRSTA USLUGE",
+    "colUnit": "JEDINICA",
+    "colQty": "KOLIČINA",
+    "colUnitPrice": "CENA",
+    "colDiscount": "RABAT",
+    "colAmount": "TOTAL",
+
+    "totalsTitle": "Ukupno",
+    "subtotal": "UKUPNO",
+    "discount": "RABAT",
+    "vat": "PDV",
+    "totalForPayment": "UKUPNO ZA UPLATU",
+
+    "paymentTermsTitle": "Uslovi plaćanja",
+    "paymentDeadline": "Rok plaćanja",
+    "referenceNumber": "Poziv na broj",
+    "paymentMethod": "Način plaćanja",
+
+    "notes": "KOMENTAR / OPIS USLUGE",
+    "legalNotesTitle": "NAPOMENA O PORESKOM OSLOBOĐENJU",
+
+    "errCompanyRegistrationNumberMissing": "Nedostaje Matični broj firme (Podešavanja → Podaci o preduzeću).",
+    "errClientRegistrationNumberMissing": "Nedostaje Matični broj komitenta.",
+    "errNotEnoughSpaceHeaderAndFooter": "Nema dovoljno prostora na stranici za zaglavlje i napomenu.",
+    "errNotEnoughSpaceContentAndFooter": "Nema dovoljno prostora za sadržaj i napomenu.",
+    "errTooManyItems": "Previše stavki za jednu stranu (za sad).",
+    "errMissingLanguage": "Nedostaje jezik u PDF podacima.",
+    "errInvalidLanguage": "Nepodržan jezik u PDF podacima.",
+
+    "footerGenerated": "Generisano iz Pausaler aplikacije."
+  },
+  "en": {
+    "docTitle": "Invoice",
+    "invoiceTitle": "INVOICE",
+
+    "issuerTitle": "From:",
+    "buyerTitle": "Customer:",
+    "detailsTitle": "Details",
+
+    "vatId": "VAT ID",
+    "registrationNumber": "Registration number",
+    "bankAccount": "Bank account",
+    "email": "Email",
+
+    "invoiceNumber": "Invoice number",
+    "issueDate": "Issue date",
+    "serviceDate": "Service date",
+    "placeOfService": "Place of service",
+    "placeOfIssue": "Place of issue",
+    "currency": "Currency",
+
+    "itemsTitle": "Items",
+    "colDescription": "SERVICE",
+    "colUnit": "UNIT",
+    "colQty": "QTY",
+    "colUnitPrice": "PRICE",
+    "colDiscount": "DISCOUNT",
+    "colAmount": "TOTAL",
+
+    "totalsTitle": "Totals",
+    "subtotal": "TOTAL",
+    "discount": "DISCOUNT",
+    "vat": "VAT",
+    "totalForPayment": "TOTAL DUE",
+
+    "paymentTermsTitle": "Payment terms",
+    "paymentDeadline": "Payment deadline",
+    "referenceNumber": "Reference number",
+    "paymentMethod": "Payment method",
+
+    "notes": "COMMENT / SERVICE DESCRIPTION",
+    "legalNotesTitle": "VAT EXEMPTION NOTE",
+
+    "errCompanyRegistrationNumberMissing": "Registration number is missing (Settings → Company details).",
+    "errClientRegistrationNumberMissing": "Client registration number is missing.",
+    "errNotEnoughSpaceHeaderAndFooter": "Not enough space on the page for header and footer note.",
+    "errNotEnoughSpaceContentAndFooter": "Not enough space on the page for content and footer note.",
+    "errTooManyItems": "Too many items for a single page (for now).",
+    "errMissingLanguage": "Missing language in PDF payload.",
+    "errInvalidLanguage": "Unsupported language in PDF payload.",
+
+    "footerGenerated": "Generated from Pausaler app."
+  }
+}

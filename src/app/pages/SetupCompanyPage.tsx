@@ -10,7 +10,7 @@ type SetupCompanyPageProps = {
   onCompleted?: () => void;
 };
 
-type SetupCompanyForm = Pick<Settings, 'companyName' | 'pib' | 'address' | 'bankAccount'>;
+type SetupCompanyForm = Pick<Settings, 'companyName' | 'registrationNumber' | 'pib' | 'address' | 'bankAccount'>;
 
 const storage = getStorage();
 
@@ -86,6 +86,14 @@ export function SetupCompanyPage({ onCompleted }: SetupCompanyPageProps) {
               rules={[{ required: true, message: t('settings.vatReq') }]}
             >
               <Input placeholder="123456789" />
+            </Form.Item>
+
+            <Form.Item
+              label={t('settings.companyRegNumber')}
+              name="registrationNumber"
+              rules={[{ required: true, message: t('settings.companyRegNumberReq') }]}
+            >
+              <Input placeholder="12345678" />
             </Form.Item>
 
             <Form.Item

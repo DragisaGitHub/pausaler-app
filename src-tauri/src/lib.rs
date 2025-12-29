@@ -5,6 +5,8 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use std::io::Cursor;
+use std::sync::OnceLock;
 
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -18,6 +20,8 @@ use lettre::{SmtpTransport, Transport};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InvoicePdfCompany {
     pub company_name: String,
+    #[serde(alias = "maticni_broj")]
+    pub registration_number: String,
     pub pib: String,
     pub address: String,
     pub bank_account: String,
@@ -26,6 +30,8 @@ pub struct InvoicePdfCompany {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InvoicePdfClient {
     pub name: String,
+    #[serde(alias = "maticni_broj")]
+    pub registration_number: Option<String>,
     pub pib: Option<String>,
     pub address: Option<String>,
     pub email: Option<String>,
@@ -34,8 +40,12 @@ pub struct InvoicePdfClient {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InvoicePdfItem {
     pub description: String,
+    #[serde(default)]
+    pub unit: Option<String>,
     pub quantity: f64,
     pub unit_price: f64,
+    #[serde(default, alias = "discountAmount")]
+    pub discount_amount: Option<f64>,
     pub total: f64,
 }
 
@@ -48,6 +58,8 @@ pub struct InvoicePdfPayload {
     pub service_date: String,
     pub currency: String,
     pub subtotal: f64,
+    #[serde(default)]
+    pub discount_total: f64,
     pub total: f64,
     pub notes: Option<String>,
     pub company: InvoicePdfCompany,
@@ -109,6 +121,7 @@ fn escape_html(input: &str) -> String {
 fn render_invoice_email(
     settings: &Settings,
     invoice: &Invoice,
+    client: Option<&Client>,
     include_pdf: bool,
     personal_note: Option<&str>,
 ) -> (String, String) {
@@ -128,6 +141,9 @@ fn render_invoice_email(
     let total = format_money(invoice.total);
     let currency = invoice.currency.trim();
 
+    let company_mb = settings.registration_number.trim();
+    let client_mb = client.map(|c| c.registration_number.trim()).unwrap_or("");
+
     let note = personal_note.map(str::trim).filter(|s| !s.is_empty());
 
     let intro_line = if include_pdf {
@@ -146,21 +162,29 @@ fn render_invoice_email(
         Some(bank_account)
     };
 
+    // Mandatory global invoice note (always)
+    let mandatory_note_text = mandatory_invoice_note_text(&lang, invoice_number);
+    let mandatory_note_html = mandatory_invoice_note_html(&lang, invoice_number);
+
     // ---- Plain-text fallback ----
     let mut text = String::new();
+    text.push_str(tr("Faktura", "Invoice"));
+    text.push_str("\n\n");
+    text.push_str(&format!("{}: {}\n", tr("Firma", "Company"), company_name));
     text.push_str(&format!(
-        "{}\n\n{}: {}\n{}: {}\n{}: {}\n{}: {} {}\n",
-        tr("Faktura", "Invoice"),
-        tr("Firma", "Company"),
-        company_name,
-        tr("Broj fakture", "Invoice number"),
-        invoice_number,
-        tr("Datum izdavanja", "Issue date"),
-        issue_date,
-        tr("Ukupno", "Total"),
-        total,
-        currency
+        "{}: {}\n",
+        tr("Matični broj", "Registration number"),
+        if company_mb.is_empty() { "-" } else { company_mb }
     ));
+    text.push_str(&format!("{}: {}\n", tr("Komitent", "Client"), invoice.client_name.trim()));
+    text.push_str(&format!(
+        "{}: {}\n",
+        tr("Matični broj komitenta", "Client registration number"),
+        if client_mb.is_empty() { "-" } else { client_mb }
+    ));
+    text.push_str(&format!("{}: {}\n", tr("Broj fakture", "Invoice number"), invoice_number));
+    text.push_str(&format!("{}: {}\n", tr("Datum izdavanja", "Issue date"), issue_date));
+    text.push_str(&format!("{}: {} {}\n", tr("Ukupno", "Total"), total, currency));
     if let Some(d) = due_date {
         text.push_str(&format!("{}: {}\n", tr("Rok plaćanja", "Due date"), d));
     }
@@ -187,6 +211,10 @@ fn render_invoice_email(
         ));
     }
 
+    text.push_str("\n--------------------------------\n");
+    text.push_str(&mandatory_note_text);
+    text.push('\n');
+
     // ---- HTML ----
     let html_company = escape_html(company_name);
     let html_invoice_number = escape_html(invoice_number);
@@ -204,6 +232,9 @@ fn render_invoice_email(
     let h_due_date = tr("Rok plaćanja", "Due date");
     let h_total = tr("Ukupno", "Total");
     let h_personal_note = tr("Lična poruka", "Personal note");
+    let h_company_reg_number = tr("Matični broj", "Registration number");
+    let h_client = tr("Komitent", "Client");
+    let h_client_reg_number = tr("Matični broj komitenta", "Client registration number");
 
     let mut html = String::new();
     html.push_str("<!doctype html><html><head><meta charset=\"utf-8\"></head>");
@@ -244,11 +275,33 @@ fn render_invoice_email(
         escape_html(h_invoice_number),
         html_invoice_number
     ));
+
+    html.push_str(&format!(
+        "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:13px;color:#111827;font-weight:600;\">{}</td></tr>",
+        escape_html(h_company_reg_number),
+        escape_html(if company_mb.is_empty() { "-" } else { company_mb })
+    ));
+
+    html.push_str(&format!(
+        "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:13px;color:#111827;font-weight:600;\">{}</td></tr>",
+        escape_html(h_client),
+        escape_html(invoice.client_name.trim())
+    ));
+
+    let html_client_mb = escape_html(if client_mb.is_empty() { "-" } else { client_mb });
+
+    html.push_str(&format!(
+        "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:13px;color:#111827;font-weight:600;\">{}</td></tr>",
+        escape_html(h_client_reg_number),
+        html_client_mb
+    ));
+
     html.push_str(&format!(
         "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:13px;color:#111827;font-weight:600;\">{}</td></tr>",
         escape_html(h_issue_date),
         html_issue_date
     ));
+
     if let Some(d) = html_due_date {
         html.push_str(&format!(
             "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:13px;color:#111827;font-weight:600;\">{}</td></tr>",
@@ -295,6 +348,10 @@ fn render_invoice_email(
             b
         ));
     }
+
+    html.push_str("<div style=\"margin-top:12px;padding-top:12px;border-top:1px solid #e6e8ec;font-size:12px;line-height:18px;color:#6b7280;\">");
+    html.push_str(&mandatory_note_html);
+    html.push_str("</div>");
     html.push_str(&format!(
         "<div style=\"margin-top:8px;font-size:12px;color:#6b7280;\">{}</div>",
         escape_html(tr("Generisano iz Pausaler aplikacije.", "Generated from Pausaler app."))
@@ -318,195 +375,1108 @@ fn push_line(
     layer.use_text(text, font_size, Mm(x), Mm(y), font);
 }
 
-fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
-    use printpdf::{BuiltinFont, Mm, PdfDocument};
+fn wrap_text_lines(input: &str, max_chars: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut current = String::new();
 
-    let lang = payload
-        .language
+    for word in input.split_whitespace() {
+        if current.is_empty() {
+            current.push_str(word);
+            continue;
+        }
+
+        if current.len() + 1 + word.len() <= max_chars {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            out.push(current);
+            current = word.to_string();
+        }
+    }
+
+    if !current.is_empty() {
+        out.push(current);
+    }
+
+    out
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct PdfLabels {
+    doc_title: String,
+    invoice_title: String,
+
+    issuer_title: String,
+    buyer_title: String,
+    details_title: String,
+
+    vat_id: String,
+    registration_number: String,
+    bank_account: String,
+    email: String,
+
+    invoice_number: String,
+    issue_date: String,
+    service_date: String,
+    place_of_service: String,
+    place_of_issue: String,
+    currency: String,
+
+    items_title: String,
+    col_description: String,
+    col_unit: String,
+    col_qty: String,
+    col_unit_price: String,
+    col_discount: String,
+    col_amount: String,
+
+    totals_title: String,
+    subtotal: String,
+    discount: String,
+    vat: String,
+    total_for_payment: String,
+
+    payment_terms_title: String,
+    payment_deadline: String,
+    reference_number: String,
+    payment_method: String,
+
+    notes: String,
+    legal_notes_title: String,
+
+    err_company_registration_number_missing: String,
+    err_client_registration_number_missing: String,
+    err_not_enough_space_header_and_footer: String,
+    err_not_enough_space_content_and_footer: String,
+    err_too_many_items: String,
+    err_missing_language: String,
+    err_invalid_language: String,
+
+    footer_generated: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PdfLabelsLocale {
+    doc_title: String,
+    invoice_title: String,
+
+    issuer_title: String,
+    buyer_title: String,
+    details_title: String,
+
+    vat_id: String,
+    registration_number: String,
+    bank_account: String,
+    email: String,
+
+    invoice_number: String,
+    issue_date: String,
+    service_date: String,
+    place_of_service: String,
+    place_of_issue: String,
+    currency: String,
+
+    items_title: String,
+    col_description: String,
+    col_unit: String,
+    col_qty: String,
+    col_unit_price: String,
+    col_discount: String,
+    col_amount: String,
+
+    totals_title: String,
+    subtotal: String,
+    discount: String,
+    vat: String,
+    total_for_payment: String,
+
+    payment_terms_title: String,
+    payment_deadline: String,
+    reference_number: String,
+    payment_method: String,
+
+    notes: String,
+    legal_notes_title: String,
+
+    err_company_registration_number_missing: String,
+    err_client_registration_number_missing: String,
+    err_not_enough_space_header_and_footer: String,
+    err_not_enough_space_content_and_footer: String,
+    err_too_many_items: String,
+    err_missing_language: String,
+    err_invalid_language: String,
+
+    footer_generated: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PdfLabelsFile {
+    sr: PdfLabelsLocale,
+    en: PdfLabelsLocale,
+}
+
+static PDF_LABELS: OnceLock<PdfLabelsFile> = OnceLock::new();
+
+fn pdf_labels(lang: &str) -> PdfLabels {
+    let file = PDF_LABELS.get_or_init(|| {
+        let json = include_str!("../../src/shared/pdfLabels.json");
+        serde_json::from_str::<PdfLabelsFile>(json).unwrap_or_else(|_| PdfLabelsFile {
+            sr: PdfLabelsLocale {
+                doc_title: String::new(),
+                invoice_title: String::new(),
+                issuer_title: String::new(),
+                buyer_title: String::new(),
+                details_title: String::new(),
+                vat_id: String::new(),
+                registration_number: String::new(),
+                bank_account: String::new(),
+                email: String::new(),
+                invoice_number: String::new(),
+                issue_date: String::new(),
+                service_date: String::new(),
+                place_of_service: String::new(),
+                place_of_issue: String::new(),
+                currency: String::new(),
+                items_title: String::new(),
+                col_description: String::new(),
+                col_unit: String::new(),
+                col_qty: String::new(),
+                col_unit_price: String::new(),
+                col_discount: String::new(),
+                col_amount: String::new(),
+                totals_title: String::new(),
+                subtotal: String::new(),
+                discount: String::new(),
+                vat: String::new(),
+                total_for_payment: String::new(),
+                payment_terms_title: String::new(),
+                payment_deadline: String::new(),
+                reference_number: String::new(),
+                payment_method: String::new(),
+                notes: String::new(),
+                legal_notes_title: String::new(),
+                err_company_registration_number_missing: String::new(),
+                err_client_registration_number_missing: String::new(),
+                err_not_enough_space_header_and_footer: String::new(),
+                err_not_enough_space_content_and_footer: String::new(),
+                err_too_many_items: String::new(),
+                err_missing_language: String::new(),
+                err_invalid_language: String::new(),
+                footer_generated: String::new(),
+            },
+            en: PdfLabelsLocale {
+                doc_title: String::new(),
+                invoice_title: String::new(),
+                issuer_title: String::new(),
+                buyer_title: String::new(),
+                details_title: String::new(),
+                vat_id: String::new(),
+                registration_number: String::new(),
+                bank_account: String::new(),
+                email: String::new(),
+                invoice_number: String::new(),
+                issue_date: String::new(),
+                service_date: String::new(),
+                place_of_service: String::new(),
+                place_of_issue: String::new(),
+                currency: String::new(),
+                items_title: String::new(),
+                col_description: String::new(),
+                col_unit: String::new(),
+                col_qty: String::new(),
+                col_unit_price: String::new(),
+                col_discount: String::new(),
+                col_amount: String::new(),
+                totals_title: String::new(),
+                subtotal: String::new(),
+                discount: String::new(),
+                vat: String::new(),
+                total_for_payment: String::new(),
+                payment_terms_title: String::new(),
+                payment_deadline: String::new(),
+                reference_number: String::new(),
+                payment_method: String::new(),
+                notes: String::new(),
+                legal_notes_title: String::new(),
+                err_company_registration_number_missing: String::new(),
+                err_client_registration_number_missing: String::new(),
+                err_not_enough_space_header_and_footer: String::new(),
+                err_not_enough_space_content_and_footer: String::new(),
+                err_too_many_items: String::new(),
+                err_missing_language: String::new(),
+                err_invalid_language: String::new(),
+                footer_generated: String::new(),
+            },
+        })
+    });
+
+    let l = lang.to_ascii_lowercase();
+    let loc = if l.starts_with("en") { &file.en } else { &file.sr };
+
+    PdfLabels {
+        doc_title: loc.doc_title.clone(),
+        invoice_title: loc.invoice_title.clone(),
+        issuer_title: loc.issuer_title.clone(),
+        buyer_title: loc.buyer_title.clone(),
+        details_title: loc.details_title.clone(),
+        vat_id: loc.vat_id.clone(),
+        registration_number: loc.registration_number.clone(),
+        bank_account: loc.bank_account.clone(),
+        email: loc.email.clone(),
+        invoice_number: loc.invoice_number.clone(),
+        issue_date: loc.issue_date.clone(),
+        service_date: loc.service_date.clone(),
+        place_of_service: loc.place_of_service.clone(),
+        place_of_issue: loc.place_of_issue.clone(),
+        currency: loc.currency.clone(),
+        items_title: loc.items_title.clone(),
+        col_description: loc.col_description.clone(),
+        col_unit: loc.col_unit.clone(),
+        col_qty: loc.col_qty.clone(),
+        col_unit_price: loc.col_unit_price.clone(),
+        col_discount: loc.col_discount.clone(),
+        col_amount: loc.col_amount.clone(),
+        totals_title: loc.totals_title.clone(),
+        subtotal: loc.subtotal.clone(),
+        discount: loc.discount.clone(),
+        vat: loc.vat.clone(),
+        total_for_payment: loc.total_for_payment.clone(),
+        payment_terms_title: loc.payment_terms_title.clone(),
+        payment_deadline: loc.payment_deadline.clone(),
+        reference_number: loc.reference_number.clone(),
+        payment_method: loc.payment_method.clone(),
+        notes: loc.notes.clone(),
+        legal_notes_title: loc.legal_notes_title.clone(),
+        err_company_registration_number_missing: loc.err_company_registration_number_missing.clone(),
+        err_client_registration_number_missing: loc.err_client_registration_number_missing.clone(),
+        err_not_enough_space_header_and_footer: loc.err_not_enough_space_header_and_footer.clone(),
+        err_not_enough_space_content_and_footer: loc.err_not_enough_space_content_and_footer.clone(),
+        err_too_many_items: loc.err_too_many_items.clone(),
+        err_missing_language: loc.err_missing_language.clone(),
+        err_invalid_language: loc.err_invalid_language.clone(),
+        footer_generated: loc.footer_generated.clone(),
+    }
+}
+
+#[allow(dead_code)]
+fn draw_rule(layer: &printpdf::PdfLayerReference, x1: f32, x2: f32, y: f32) {
+    use printpdf::Mm;
+    layer.add_line(printpdf::Line {
+        points: vec![
+            (printpdf::Point::new(Mm(x1), Mm(y)), false),
+            (printpdf::Point::new(Mm(x2), Mm(y)), false),
+        ],
+        is_closed: false,
+    });
+}
+
+fn draw_rule_with_thickness(
+    layer: &printpdf::PdfLayerReference,
+    x1: f32,
+    x2: f32,
+    y: f32,
+    thickness: f32,
+) {
+    use printpdf::Mm;
+    layer.set_outline_thickness(thickness);
+    layer.add_line(printpdf::Line {
+        points: vec![
+            (printpdf::Point::new(Mm(x1), Mm(y)), false),
+            (printpdf::Point::new(Mm(x2), Mm(y)), false),
+        ],
+        is_closed: false,
+    });
+}
+
+#[allow(dead_code)]
+fn push_line_right(
+    layer: &printpdf::PdfLayerReference,
+    font: &printpdf::IndirectFontRef,
+    text: &str,
+    font_size: f32,
+    x_right: f32,
+    y: f32,
+) {
+    // printpdf doesn't expose reliable text metrics; use a pragmatic estimate.
+    // This is good enough for numeric columns and matches the reference visually.
+    let width_est = (text.chars().count() as f32) * font_size * 0.42;
+    let x = (x_right - width_est).max(0.0);
+    push_line(layer, font, text, font_size, x, y);
+}
+
+fn text_width_mm_ttf(face: &ttf_parser::Face<'_>, text: &str, font_size_pt: f32) -> f32 {
+    // PDF font sizes are in points; our coordinates are in millimeters.
+    const PT_TO_MM: f32 = 25.4 / 72.0;
+    let units_per_em = face.units_per_em() as f32;
+    if units_per_em <= 0.0 {
+        return 0.0;
+    }
+
+    let mut width_units: i32 = 0;
+
+    for ch in text.chars() {
+        let Some(gid) = face.glyph_index(ch) else {
+            continue;
+        };
+
+        width_units += face.glyph_hor_advance(gid).unwrap_or(0) as i32;
+    }
+
+    let width_pt = (width_units as f32 / units_per_em) * font_size_pt;
+    width_pt * PT_TO_MM
+}
+
+fn push_line_right_measured(
+    layer: &printpdf::PdfLayerReference,
+    font: &printpdf::IndirectFontRef,
+    ttf_face: &ttf_parser::Face<'_>,
+    text: &str,
+    font_size: f32,
+    x_right: f32,
+    y: f32,
+) {
+    let width_mm = text_width_mm_ttf(ttf_face, text, font_size);
+    let x = (x_right - width_mm).max(0.0);
+    push_line(layer, font, text, font_size, x, y);
+}
+
+fn split_and_wrap_lines(input: &str, max_chars: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in input.lines() {
+        let s = raw.trim();
+        if s.is_empty() {
+            continue;
+        }
+        for line in wrap_text_lines(s, max_chars) {
+            out.push(line);
+        }
+    }
+    out
+}
+
+fn format_money_sr(v: f64) -> String {
+    // Serbian style: thousands '.', decimals ',' (e.g., 16.200,00)
+    let s = format!("{:.2}", v);
+    let parts = s.split('.').collect::<Vec<_>>();
+    let int_part = parts[0];
+    let dec_part = parts.get(1).copied().unwrap_or("00");
+
+    let mut out = String::new();
+    let chars: Vec<char> = int_part.chars().collect();
+    let mut cnt = 0;
+    for i in (0..chars.len()).rev() {
+        if cnt == 3 {
+            out.push('.');
+            cnt = 0;
+        }
+        out.push(chars[i]);
+        cnt += 1;
+    }
+    let int_with_sep: String = out.chars().rev().collect();
+    format!("{},{}", int_with_sep, dec_part)
+}
+
+fn format_qty_sr(v: f64) -> String {
+    // Match reference (2 decimals, decimal comma)
+    let s = format!("{:.2}", v);
+    s.replace('.', ",")
+}
+
+#[allow(dead_code)]
+fn fill_rect_gray(
+    layer: &printpdf::PdfLayerReference,
+    x: f32,
+    y_top: f32,
+    w: f32,
+    h: f32,
+    gray: f32,
+) {
+    use printpdf::{path::PaintMode, Color, Mm, Rect, Rgb};
+
+    layer.set_fill_color(Color::Rgb(Rgb::new(gray, gray, gray, None)));
+    // printpdf uses bottom-left origin; our y coordinates are already in that space.
+    let rect = Rect::new(Mm(x), Mm(y_top - h), Mm(x + w), Mm(y_top)).with_mode(PaintMode::Fill);
+    layer.add_rect(rect);
+    // reset fill to black
+    layer.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+}
+
+#[allow(dead_code)]
+fn push_kv_wrapped(
+    layer: &printpdf::PdfLayerReference,
+    font: &printpdf::IndirectFontRef,
+    label: &str,
+    value: &str,
+    font_size: f32,
+    x_label: f32,
+    x_value: f32,
+    y: f32,
+    max_value_chars: usize,
+    line_gap: f32,
+) -> f32 {
+    let value = value.trim();
+    let value_lines = if value.is_empty() {
+        vec![String::new()]
+    } else {
+        wrap_text_lines(value, max_value_chars)
+    };
+
+    // First line: label + first value line
+    push_line(layer, font, &format!("{}:", label), font_size, x_label, y);
+    push_line(layer, font, &value_lines[0], font_size, x_value, y);
+
+    // Continuation lines: value only, aligned to value column
+    let mut current_y = y;
+    for line in value_lines.iter().skip(1) {
+        current_y -= line_gap;
+        push_line(layer, font, line, font_size, x_value, current_y);
+    }
+
+    current_y
+}
+
+fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Result<Vec<u8>, String> {
+    use printpdf::{Image, ImageTransform, Mm, PdfDocument};
+    use base64::Engine as _;
+
+    // Language selection must be explicit (no implicit Serbian fallback).
+    let lang_raw = payload.language.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let lang_key = match lang_raw {
+        Some(l) => {
+            let lower = l.to_ascii_lowercase();
+            if lower.starts_with("en") {
+                "en"
+            } else if lower.starts_with("sr") {
+                "sr"
+            } else {
+                return Err(pdf_labels("en").err_invalid_language.clone());
+            }
+        }
+        None => {
+            return Err(pdf_labels("en").err_missing_language.clone());
+        }
+    };
+
+    let labels = pdf_labels(lang_key);
+
+    if payload.company.registration_number.trim().is_empty() {
+        return Err(labels.err_company_registration_number_missing.clone());
+    }
+
+    let client_mb = payload
+        .client
+        .registration_number
         .as_deref()
-        .unwrap_or("sr")
-        .to_ascii_lowercase();
-    let tr = |sr: &'static str, en: &'static str| if lang.starts_with("en") { en } else { sr };
+        .unwrap_or("")
+        .trim();
+    if client_mb.is_empty() {
+        return Err(labels.err_client_registration_number_missing.clone());
+    }
 
     let (doc, page1, layer1) = PdfDocument::new(
-        tr("Faktura", "Invoice"),
+        &labels.doc_title,
         Mm(210.0),
         Mm(297.0),
         "Layer 1",
     );
     let layer = doc.get_page(page1).get_layer(layer1);
 
+    // Embed a Unicode font to support Cyrillic (ћирилица) and other non-ASCII characters.
+    static FONT_BYTES: &[u8] = include_bytes!("../assets/DejaVuSans.ttf");
     let font = doc
-        .add_builtin_font(BuiltinFont::Helvetica)
+        .add_external_font(Cursor::new(FONT_BYTES as &[u8]))
         .map_err(|e| e.to_string())?;
-    let font_bold = doc
-        .add_builtin_font(BuiltinFont::HelveticaBold)
-        .map_err(|e| e.to_string())?;
+    // Use the same embedded font for all text to ensure consistent Unicode rendering.
+    let font_bold = font.clone();
 
-    let mut y: f32 = 285.0;
+    // Parse the same embedded font for deterministic text width measurement (used for true right-alignment).
+    let ttf_face = ttf_parser::Face::parse(FONT_BYTES, 0)
+        .map_err(|_| "Failed to parse embedded font for measurement".to_string())?;
 
-    // Header: Company (left)
-    push_line(&layer, &font_bold, &payload.company.company_name, 16.0, 15.0, y);
-    y -= 7.0;
-    push_line(&layer, &font, &format!("{}: {}", tr("PIB", "VAT ID"), payload.company.pib), 10.0, 15.0, y);
-    y -= 5.0;
-    push_line(&layer, &font, &payload.company.address, 10.0, 15.0, y);
-    y -= 5.0;
-    push_line(
-        &layer,
-        &font,
-        &format!("{}: {}", tr("Tekući račun", "Bank account"), payload.company.bank_account),
-        10.0,
-        15.0,
-        y,
-    );
+    // Layout constants (language-agnostic)
+    const PAGE_W: f32 = 210.0;
+    const PAGE_H: f32 = 297.0;
+    const PAGE_MARGIN_X: f32 = 15.0;
+    const PAGE_MARGIN_TOP: f32 = 12.0;
+    const PAGE_MARGIN_BOTTOM: f32 = 12.0;
 
-    // Header: Title (right)
-    push_line(&layer, &font_bold, tr("FAKTURA", "INVOICE"), 24.0, 145.0, 285.0);
-    push_line(&layer, &font_bold, &payload.invoice_number, 12.0, 145.0, 277.0);
+    #[allow(unused)]
+    const SECTION_GAP: f32 = 10.0;
+    #[allow(unused)]
+    const LINE_GAP: f32 = 5.0;
+    #[allow(unused)]
+    const HEADER_LINE_GAP: f32 = 5.0;
+    #[allow(unused)]
+    const HEADER_TITLE_GAP: f32 = 8.0;
 
-    // Divider
-    y = 265.0;
-    layer.add_line(
-        printpdf::Line {
-            points: vec![
-                (printpdf::Point::new(Mm(15.0), Mm(y)), false),
-                (printpdf::Point::new(Mm(195.0), Mm(y)), false),
-            ],
-            is_closed: false,
-        },
-    );
+    #[allow(unused)]
+    const COLUMN_GAP: f32 = 10.0;
+    #[allow(unused)]
+    const LABEL_COL_W: f32 = 36.0;
+    #[allow(unused)]
+    const HEADER_LABEL_COL_W: f32 = 38.0;
 
-    // Buyer + invoice details
-    y -= 10.0;
-    push_line(&layer, &font_bold, tr("Kupac:", "Buyer:"), 12.0, 15.0, y);
-    push_line(&layer, &font_bold, tr("Detalji:", "Details:"), 12.0, 120.0, y);
+    // Cell padding (avoid scattered magic numbers)
+    const CELL_PAD_X: f32 = 1.2;
+    const CELL_PAD_Y: f32 = 3.0;
 
-    y -= 7.0;
-    push_line(&layer, &font, &payload.client.name, 10.0, 15.0, y);
-    push_line(
-        &layer,
-        &font,
-        &format!("{}: {}", tr("Datum izdavanja", "Issue date"), payload.issue_date),
-        10.0,
-        120.0,
-        y,
-    );
+    // Debug-only visual verification switch (make padding changes obvious in generated PDFs).
+    const DEBUG_PDF_LAYOUT_EXAGGERATE: bool = cfg!(debug_assertions) && false;
+    const DEBUG_CELL_PAD_X: f32 = 8.0;
+    const DEBUG_CELL_PAD_Y: f32 = 6.0;
 
-    y -= 5.0;
-    if let Some(pib) = &payload.client.pib {
-        push_line(&layer, &font, &format!("{}: {}", tr("PIB", "VAT ID"), pib), 10.0, 15.0, y);
-    }
-    push_line(
-        &layer,
-        &font,
-        &format!("{}: {}", tr("Datum prometa", "Service date"), payload.service_date),
-        10.0,
-        120.0,
-        y,
-    );
+    let cell_pad_x = if DEBUG_PDF_LAYOUT_EXAGGERATE {
+        DEBUG_CELL_PAD_X
+    } else {
+        CELL_PAD_X
+    };
+    let cell_pad_y = if DEBUG_PDF_LAYOUT_EXAGGERATE {
+        DEBUG_CELL_PAD_Y
+    } else {
+        CELL_PAD_Y
+    };
 
-    y -= 5.0;
-    if let Some(addr) = &payload.client.address {
-        push_line(&layer, &font, addr, 10.0, 15.0, y);
-    }
-    push_line(
-        &layer,
-        &font,
-        &format!("{}: {}", tr("Valuta", "Currency"), payload.currency),
-        10.0,
-        120.0,
-        y,
-    );
+    let content_left_x = PAGE_MARGIN_X;
+    let content_right_x = PAGE_W - PAGE_MARGIN_X;
+    let content_width = content_right_x - content_left_x;
 
-    y -= 12.0;
+    // Reserve footer area for the mandatory legal note and footer line.
+    let footer_y = PAGE_MARGIN_BOTTOM;
+    let footer_text_y = footer_y;
+    // Reserve space for: (1) footer line, (2) place-of-issue line.
+    let footer_note_bottom_y = footer_text_y + 10.0;
+    let footer_note_max_chars = 95;
 
-    // Items table header
-    push_line(&layer, &font_bold, tr("Stavke", "Items"), 12.0, 15.0, y);
-    y -= 6.0;
+    // ----- Template A – Classic Serbian Invoice (reference-driven) -----
 
-    // Table columns (x positions)
-    let x_desc = 15.0;
-    let x_qty = 120.0;
-    let x_unit = 145.0;
-    let x_total = 175.0;
+    // Language-dependent numeric formatting
+    let is_sr = lang_key == "sr";
+    let fmt_money = |v: f64| if is_sr { format_money_sr(v) } else { format_money(v) };
+    let fmt_qty = |v: f64| if is_sr { format_qty_sr(v) } else { format!("{:.2}", v) };
 
-    push_line(&layer, &font_bold, tr("Opis", "Description"), 10.0, x_desc, y);
-    push_line(&layer, &font_bold, tr("Kol.", "Qty"), 10.0, x_qty, y);
-    push_line(&layer, &font_bold, tr("Cena", "Price"), 10.0, x_unit, y);
-    push_line(&layer, &font_bold, tr("Ukupno", "Total"), 10.0, x_total, y);
+    // Build legal-note lines from templates (already localized, with placeholders resolved)
+    let legal_note_text = mandatory_invoice_note_text(lang_key, &payload.invoice_number);
+    let legal_note_lines = split_and_wrap_lines(&legal_note_text, footer_note_max_chars);
 
-    y -= 3.5;
-    layer.add_line(
-        printpdf::Line {
-            points: vec![
-                (printpdf::Point::new(Mm(15.0), Mm(y)), false),
-                (printpdf::Point::new(Mm(195.0), Mm(y)), false),
-            ],
-            is_closed: false,
-        },
-    );
-    y -= 7.0;
+    // Flowing cursor
+    let mut y = PAGE_H - PAGE_MARGIN_TOP;
 
-    // Rows
-    for (idx, it) in payload.items.iter().enumerate() {
-        if y < 40.0 {
-            return Err("Previše stavki za jednu stranu (za sad).".to_string());
+    // Document title block (ABOVE the top rule).
+    // Keep this as a single tunable constant so we can shift the entire header down
+    // without changing the internal alignment of the issuer/buyer columns.
+    const TITLE_BLOCK_H: f32 = 14.0;
+    const TITLE_TOP_PAD: f32 = 1.5;
+    let doc_title = "FAKTURA";
+    let doc_title_size: f32 = 14.0;
+    let doc_title_w = text_width_mm_ttf(&ttf_face, doc_title, doc_title_size);
+    let doc_title_x = content_left_x + (content_width - doc_title_w) / 2.0;
+    let doc_title_y = y - TITLE_TOP_PAD;
+    push_line(&layer, &font_bold, doc_title, doc_title_size, doc_title_x, doc_title_y);
+
+    // Shift the header block down; the top rule becomes the separator UNDER the title.
+    y -= TITLE_BLOCK_H;
+
+    // Top horizontal rule (as in reference)
+    draw_rule_with_thickness(&layer, content_left_x, content_right_x, y, 0.85);
+    y -= 8.5;
+
+    // A) Parties block (two columns)
+    // Optional company logo:
+    // - when present, render in top-left header area
+    // - shift issuer block X to the right of the logo
+    // - keep Y flow unchanged so downstream layout (rules/table/totals) stays identical
+    const LOGO_GAP_X: f32 = 4.0;
+    const LOGO_DPI: f32 = 300.0;
+
+    let left_col_right_x = content_left_x + (content_width / 2.0);
+    let left_col_w_orig = left_col_right_x - content_left_x;
+
+    // Decode a data URL logo (as stored from the UI: data:image/*;base64,...) into an image.
+    let decoded_logo = logo_url
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| {
+            let lower = s.to_ascii_lowercase();
+            if !lower.starts_with("data:") {
+                return None;
+            }
+            let comma = s.find(',')?;
+            let (meta, data) = s.split_at(comma);
+            if !meta.to_ascii_lowercase().contains(";base64") {
+                return None;
+            }
+            let b64 = &data[1..];
+            let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+            let img = printpdf::image_crate::load_from_memory(&bytes).ok()?;
+            Some(img)
+        });
+
+    // Compute issuer anchor X. Default is the original (no-logo) anchor.
+    let mut issuer_left_x = content_left_x;
+
+    let right_x = content_left_x + (content_width / 2.0) + 4.0;
+    let title_size = 10.0;
+    let name_size = 11.0;
+    let text_size = 8.3;
+    let line_h = 4.0;
+
+    // If we have a logo:
+    // - align its TOP to the same Y as the "Od:" label (issuer_top_y)
+    // - align its BOTTOM to the same Y as the last issuer line ("Tekući račun")
+    // - scale UP/DOWN to fill that exact height (no vertical centering, no size caps)
+    // Then shift the issuer block to the right: logo_right_x + LOGO_GAP_X.
+    if let Some(img) = decoded_logo {
+        let px_w = img.width().max(1) as f32;
+        let px_h = img.height().max(1) as f32;
+
+        let natural_w_mm = px_w / LOGO_DPI * 25.4;
+        let natural_h_mm = px_h / LOGO_DPI * 25.4;
+        let issuer_top_y = y;
+        let y_after_titles = y - 5.0;
+
+        let addr_chars_for_issuer_left_x = |issuer_left_x: f32| {
+            let left_col_w_now = (left_col_right_x - issuer_left_x).max(10.0);
+            ((42.0 * (left_col_w_now / left_col_w_orig)).floor() as usize).clamp(20, 42)
+        };
+
+        // Fixed-point iteration: wrapping -> issuer height -> logo scale -> logo width -> wrapping.
+        let mut logo_w_mm = natural_w_mm;
+        let mut scale = 1.0_f32;
+        let mut issuer_last_line_y = y_after_titles;
+
+        for _ in 0..3 {
+            let next_issuer_left_x = content_left_x + logo_w_mm + LOGO_GAP_X;
+            let addr_chars = addr_chars_for_issuer_left_x(next_issuer_left_x);
+            let addr_lines = split_and_wrap_lines(&payload.company.address, addr_chars);
+
+            // Last issuer line baseline (Tekući račun) based on existing layout steps.
+            issuer_last_line_y = y_after_titles - 4.6 - (addr_lines.len() as f32) * line_h - 2.0 * line_h;
+            let issuer_block_h = issuer_top_y - issuer_last_line_y;
+
+            scale = issuer_block_h / natural_h_mm;
+            logo_w_mm = natural_w_mm * scale;
         }
 
-        let desc = format!("{}. {}", idx + 1, it.description);
-        push_line(&layer, &font, &desc, 10.0, x_desc, y);
-        push_line(&layer, &font, &format!("{:.2}", it.quantity), 10.0, x_qty, y);
-        push_line(&layer, &font, &format_money(it.unit_price), 10.0, x_unit, y);
-        push_line(&layer, &font_bold, &format_money(it.total), 10.0, x_total, y);
+        issuer_left_x = content_left_x + logo_w_mm + LOGO_GAP_X;
 
-        y -= 6.0;
+        // Draw logo so its top aligns to issuer_top_y and its bottom aligns to the last issuer line.
+        let logo_bottom_y = issuer_last_line_y;
+        let image = Image::from_dynamic_image(&img);
+        image.add_to_layer(
+            layer.clone(),
+            ImageTransform {
+                translate_x: Some(Mm(content_left_x)),
+                translate_y: Some(Mm(logo_bottom_y)),
+                rotate: None,
+                scale_x: Some(scale),
+                scale_y: Some(scale),
+                dpi: Some(LOGO_DPI),
+            },
+        );
     }
 
-    y -= 4.0;
-    layer.add_line(
-        printpdf::Line {
-            points: vec![
-                (printpdf::Point::new(Mm(15.0), Mm(y)), false),
-                (printpdf::Point::new(Mm(195.0), Mm(y)), false),
-            ],
-            is_closed: false,
-        },
+    // Visual hierarchy: strong section titles; names bold; details regular.
+    push_line(&layer, &font_bold, &labels.issuer_title, title_size, issuer_left_x, y);
+    push_line(&layer, &font_bold, &labels.buyer_title, title_size, right_x, y);
+    y -= 5.0;
+
+    // Left column: issuer
+    let mut y_left = y;
+    push_line(&layer, &font_bold, &payload.company.company_name, name_size, issuer_left_x, y_left);
+    y_left -= 4.6;
+
+    let issuer_addr_max_chars = {
+        let left_col_w_now = (left_col_right_x - issuer_left_x).max(10.0);
+        ((42.0 * (left_col_w_now / left_col_w_orig)).floor() as usize).clamp(20, 42)
+    };
+    for line in split_and_wrap_lines(&payload.company.address, issuer_addr_max_chars) {
+        push_line(&layer, &font, &line, text_size, issuer_left_x, y_left);
+        y_left -= line_h;
+    }
+    // PIB
+    push_line(
+        &layer,
+        &font,
+        &format!("{}: {}", &labels.vat_id, &payload.company.pib),
+        text_size,
+        issuer_left_x,
+        y_left,
+    );
+    y_left -= line_h;
+    // Registration number
+    push_line(
+        &layer,
+        &font,
+        &format!("{}: {}", &labels.registration_number, &payload.company.registration_number),
+        text_size,
+        issuer_left_x,
+        y_left,
+    );
+    y_left -= line_h;
+    // Bank account
+    push_line(
+        &layer,
+        &font,
+        &format!("{}: {}", &labels.bank_account, &payload.company.bank_account),
+        text_size,
+        issuer_left_x,
+        y_left,
+    );
+    y_left -= line_h;
+    // Optional issuer email isn't present in payload → omit (reference-driven)
+
+    // Right column: buyer
+    let mut y_right = y;
+    push_line(&layer, &font_bold, &payload.client.name, name_size, right_x, y_right);
+    y_right -= 4.6;
+
+    if let Some(addr) = &payload.client.address {
+        for line in split_and_wrap_lines(addr, 42) {
+            push_line(&layer, &font, &line, text_size, right_x, y_right);
+            y_right -= line_h;
+        }
+    }
+    if let Some(pib) = &payload.client.pib {
+        push_line(
+            &layer,
+            &font,
+            &format!("{}: {}", &labels.vat_id, pib),
+            text_size,
+            right_x,
+            y_right,
+        );
+        y_right -= line_h;
+    }
+    push_line(
+        &layer,
+        &font,
+        &format!("{}: {}", &labels.registration_number, client_mb),
+        text_size,
+        right_x,
+        y_right,
+    );
+    y_right -= line_h;
+
+    // After parties block, align y under the lower column
+    y = y_left.min(y_right) - 3.2;
+    draw_rule_with_thickness(&layer, content_left_x, content_right_x, y, 0.45);
+    y -= 6.8;
+
+    // B) Items table
+    // Column grid (fixed widths + explicit anchors to avoid numeric overlap)
+    let table_left = content_left_x;
+    let table_right = content_right_x;
+    let col_gap = 3.0;
+    let col_unit_w = 16.0;
+    let col_qty_w = 18.0;
+    let col_price_w_base = 24.0;
+    let col_disc_w_base = 20.0;
+    let col_total_w_base = 26.0;
+
+    // RABAT is almost always 0,00 -> keep it compact, but ensure header + a typical value fit.
+    // Also ensure CENA and TOTAL can comfortably render large values (e.g., 200.000,00 / 200,000.00).
+    let sample_discount = fmt_money(0.0);
+    let sample_big_money = fmt_money(200000.0);
+
+    let header_size_measure: f32 = 8.6;
+
+    let min_disc_w = text_width_mm_ttf(&ttf_face, &labels.col_discount, header_size_measure)
+        .max(text_width_mm_ttf(&ttf_face, &sample_discount, text_size))
+        + 2.0 * cell_pad_x;
+
+    let min_price_w = text_width_mm_ttf(&ttf_face, &labels.col_unit_price, header_size_measure)
+        .max(text_width_mm_ttf(&ttf_face, &sample_big_money, text_size))
+        + 2.0 * cell_pad_x;
+
+    let min_total_w = text_width_mm_ttf(&ttf_face, &labels.col_amount, header_size_measure)
+        .max(text_width_mm_ttf(&ttf_face, &sample_big_money, text_size))
+        + 2.0 * cell_pad_x;
+
+    // Apply requested reallocation:
+    // - shrink RABAT to its minimum
+    // - use the freed width primarily for CENA
+    // - allow TOTAL to grow if needed to fit the large-value sample
+    let col_disc_w = min_disc_w;
+    let freed_from_disc = (col_disc_w_base - col_disc_w).max(0.0);
+    let available_for_price_total = col_price_w_base + col_total_w_base + freed_from_disc;
+
+    let col_total_w = col_total_w_base.max(min_total_w);
+    let mut col_price_w = col_price_w_base.max(min_price_w);
+    let used_by_price_total = col_price_w + col_total_w;
+    if used_by_price_total < available_for_price_total {
+        // Give any remaining width to CENA (primary beneficiary).
+        col_price_w += available_for_price_total - used_by_price_total;
+    }
+
+    let col_total_right = table_right - 0.5;
+    let col_total_left = col_total_right - col_total_w;
+    let col_disc_right = col_total_left - col_gap;
+    let col_disc_left = col_disc_right - col_disc_w;
+    let col_price_right = col_disc_left - col_gap;
+    let col_price_left = col_price_right - col_price_w;
+    let col_qty_right = col_price_left - col_gap;
+    let col_qty_left = col_qty_right - col_qty_w;
+    let col_unit_right = col_qty_left - col_gap;
+    let col_unit_left = col_unit_right - col_unit_w;
+    let col_service_left = table_left;
+
+    // Header row (authority) — anchor to the same grid as row values
+    let header_size = 8.6;
+    let service_header_x = col_service_left;
+    let unit_header_x = col_unit_left;
+    let qty_right_x = col_qty_right - cell_pad_x;
+    let price_right_x = col_price_right - cell_pad_x;
+    let disc_right_x = col_disc_right - cell_pad_x;
+    let numeric_right_x = col_total_right - cell_pad_x;
+
+    push_line(&layer, &font_bold, &labels.col_description, header_size, service_header_x, y);
+    push_line(&layer, &font_bold, &labels.col_unit, header_size, unit_header_x, y);
+    push_line_right_measured(&layer, &font_bold, &ttf_face, &labels.col_qty, header_size, qty_right_x, y);
+    push_line_right_measured(
+        &layer,
+        &font_bold,
+        &ttf_face,
+        &labels.col_unit_price,
+        header_size,
+        price_right_x,
+        y,
+    );
+    push_line_right_measured(&layer, &font_bold, &ttf_face, &labels.col_discount, header_size, disc_right_x, y);
+    push_line_right_measured(&layer, &font_bold, &ttf_face, &labels.col_amount, header_size, numeric_right_x, y);
+    y -= 6.0;
+    draw_rule_with_thickness(&layer, table_left, table_right, y, 0.60);
+    y -= 7.8;
+
+    // Rows
+    // Reduce vertical spacing between rows (~50%) without affecting header spacing
+    // or the last-row → totals spacing.
+    let row_advance_base: f32 = 10.6;
+    let row_advance_tight: f32 = row_advance_base * 0.5;
+
+    for (row_idx, it) in payload.items.iter().enumerate() {
+        // Keep some reserved space for totals + blocks below.
+        if y < footer_note_bottom_y + 75.0 {
+            return Err(labels.err_too_many_items.clone());
+        }
+
+        // Description wraps in the first column
+        // Description wraps; keep it comfortably inside the service column.
+        let desc_lines = split_and_wrap_lines(&it.description, 44);
+        let row_top_y = y;
+
+        // Render first line at row_y, continuation lines below (only in service column)
+        if let Some(first) = desc_lines.first() {
+            push_line(&layer, &font, first, text_size, col_service_left, row_top_y);
+        }
+
+        // Unit (fallback for old invoices; always render a valid value)
+        let unit_display: &'static str = {
+            let raw = it.unit.as_deref().unwrap_or("").trim();
+            if raw.is_empty() {
+                "kom"
+            } else {
+                let lower = raw.to_ascii_lowercase();
+                match lower.as_str() {
+                    "kom" => "kom",
+                    "sat" | "h" => "sat",
+                    "m2" | "m²" | "m^2" => "m²",
+                    "usluga" => "usluga",
+                    _ => "usluga",
+                }
+            }
+        };
+        push_line(&layer, &font, unit_display, text_size, col_unit_left, row_top_y);
+
+        // Qty/Price/Discount/Total
+        push_line_right_measured(&layer, &font, &ttf_face, &fmt_qty(it.quantity), text_size, qty_right_x, row_top_y);
+        push_line_right_measured(&layer, &font, &ttf_face, &fmt_money(it.unit_price), text_size, price_right_x, row_top_y);
+        let line_subtotal = it.quantity * it.unit_price;
+        let line_discount = it.discount_amount.unwrap_or(0.0).clamp(0.0, line_subtotal);
+        let line_total = line_subtotal - line_discount;
+        push_line_right_measured(&layer, &font, &ttf_face, &fmt_money(line_discount), text_size, disc_right_x, row_top_y);
+        push_line_right_measured(&layer, &font_bold, &ttf_face, &fmt_money(line_total), text_size, numeric_right_x, row_top_y);
+
+        let mut row_h_used = 0.0;
+        for extra in desc_lines.iter().skip(1) {
+            row_h_used += line_h;
+            push_line(&layer, &font, extra, text_size, col_service_left, row_top_y - row_h_used);
+        }
+
+        // Advance to next row (tighten only between rows)
+        let is_last_row = row_idx + 1 == payload.items.len();
+        let row_advance = if is_last_row { row_advance_base } else { row_advance_tight };
+        y = row_top_y - row_advance - row_h_used;
+    }
+
+    // Table bottom rule (end-of-items separator)
+    y += 1.2;
+    draw_rule_with_thickness(&layer, table_left, table_right, y, 0.40);
+    y -= 7.2;
+
+    // C) Totals area (3-row, boxed/striped like reference)
+    let totals_left = table_left;
+    // Single explicit padding between the numeric right edge (TOTAL column) and the totals box border.
+    // Keep it grid-driven: col_total_right is anchored to the table; the box is a fixed pad away.
+    let totals_pad: f32 = 0.5;
+    let totals_box_right = col_total_right + totals_pad;
+    let totals_row_h = 7.6;
+    let _totals_w = totals_box_right - totals_left;
+
+    // Totals background: plain white (no stripe fills)
+    let totals_top_y = y + 3.0;
+
+    // Vertically centered baselines inside each row
+    // Tie labels to the left-most table grid boundary (description column left) with existing grid spacing.
+    let label_x = col_service_left + col_gap;
+    // IMPORTANT: use the exact same numeric right edge as the table TOTAL column, with cell padding.
+    let value_right = numeric_right_x;
+    let row1_top_y = totals_top_y;
+    let row2_top_y = totals_top_y - totals_row_h;
+    let row3_top_y = totals_top_y - 2.0 * totals_row_h;
+    let row1_y = row1_top_y - cell_pad_y;
+    let row2_y = row2_top_y - cell_pad_y;
+    let row3_y = row3_top_y - cell_pad_y;
+
+    let totals_label_size = 8.8;
+    let totals_value_size = 9.3;
+    let totals_emph_label_size = 10.0;
+    let totals_emph_value_size = 10.5;
+
+    push_line(
+        &layer,
+        &font,
+        &format!("{} ({})", &labels.subtotal, &payload.currency),
+        totals_label_size,
+        label_x,
+        row1_y,
+    );
+    push_line_right_measured(
+        &layer,
+        &font_bold,
+        &ttf_face,
+        &fmt_money(payload.subtotal),
+        totals_value_size,
+        value_right,
+        row1_y,
     );
 
-    // Totals
-    y -= 10.0;
-    push_line(&layer, &font, &format!("{}:", tr("Osnovica", "Subtotal")), 11.0, 145.0, y);
-    push_line(&layer, &font_bold, &format_money(payload.subtotal), 11.0, 175.0, y);
+    push_line(
+        &layer,
+        &font,
+        &format!("{} ({})", &labels.discount, &payload.currency),
+        totals_label_size,
+        label_x,
+        row2_y,
+    );
+    push_line_right_measured(
+        &layer,
+        &font_bold,
+        &ttf_face,
+        &fmt_money(payload.discount_total),
+        totals_value_size,
+        value_right,
+        row2_y,
+    );
 
-    y -= 7.0;
-    push_line(&layer, &font_bold, &format!("{}:", tr("UKUPNO", "TOTAL")), 13.0, 145.0, y);
-    push_line(&layer, &font_bold, &format!("{} {}", format_money(payload.total), payload.currency), 13.0, 165.0, y);
+    push_line(
+        &layer,
+        &font_bold,
+        &format!("{} ({})", &labels.total_for_payment, &payload.currency),
+        totals_emph_label_size,
+        label_x,
+        row3_y,
+    );
+    let total_due = payload.subtotal - payload.discount_total;
+    push_line_right_measured(
+        &layer,
+        &font_bold,
+        &ttf_face,
+        &fmt_money(total_due),
+        totals_emph_value_size,
+        value_right,
+        row3_y,
+    );
 
-    // Notes
+    // Box lines
+    // Remove the totals top border to avoid a rule visually sticking to the first totals row.
+    draw_rule_with_thickness(&layer, totals_left, totals_box_right, totals_top_y - 3.0 * totals_row_h, 0.85);
+
+    y = totals_top_y - 3.0 * totals_row_h - 7.0;
+
+    // D) Comment / service description block
+    push_line(&layer, &font_bold, &labels.notes, 10.0, content_left_x, y);
+    y -= 4.6;
+
+    // Map available fields:
+    // - Issue date, Service date
+    push_line(
+        &layer,
+        &font,
+        &format!("{}: {}", &labels.issue_date, &payload.issue_date),
+        8.5,
+        content_left_x,
+        y,
+    );
+    y -= 4.4;
+    push_line(
+        &layer,
+        &font,
+        &format!("{}: {}", &labels.service_date, &payload.service_date),
+        8.5,
+        content_left_x,
+        y,
+    );
+    y -= 4.4;
+
+    // - Reference number (invoice number)
+    push_line(
+        &layer,
+        &font,
+        &format!("{}: {}", &labels.reference_number, &payload.invoice_number),
+        8.5,
+        content_left_x,
+        y,
+    );
+    y -= 6.0;
+
+    // - User notes (if present)
     if let Some(notes) = &payload.notes {
-        if !notes.trim().is_empty() {
-            y -= 14.0;
-            push_line(&layer, &font_bold, &format!("{}:", tr("Napomene", "Notes")), 11.0, 15.0, y);
-            y -= 6.0;
-
-            let mut current_y = y;
-            for line in notes.lines() {
-                if current_y < 20.0 { break; }
-                push_line(&layer, &font, line, 10.0, 15.0, current_y);
-                current_y -= 5.0;
+        let notes = notes.trim();
+        if !notes.is_empty() {
+            for line in split_and_wrap_lines(notes, 95) {
+                if y < footer_note_bottom_y + 35.0 {
+                    break;
+                }
+                push_line(&layer, &font, &line, 8.5, content_left_x, y);
+                y -= 4.4;
             }
         }
     }
 
-    // Footer
-    push_line(&layer, &font, tr("Generisano iz Pausaler aplikacije.", "Generated from Pausaler app."), 9.0, 15.0, 12.0);
+    y -= 5.0;
+
+    // E) Legal/tax note block (title + localized template lines)
+    push_line(&layer, &font_bold, &labels.legal_notes_title, 10.0, content_left_x, y);
+    y -= 4.6;
+    for line in legal_note_lines {
+        if y < footer_note_bottom_y + 12.0 {
+            break;
+        }
+        push_line(&layer, &font, &line, 8.5, content_left_x, y);
+        y -= 4.4;
+    }
+
+    // F) Footer / branding (tiny or omitted)
+    if !labels.footer_generated.trim().is_empty() {
+        push_line(&layer, &font, &labels.footer_generated, 6.0, content_left_x, 4.0);
+    }
 
     let mut writer = std::io::BufWriter::new(Vec::<u8>::new());
     doc.save(&mut writer).map_err(|e| e.to_string())?;
-    writer
-        .into_inner()
-        .map_err(|e| e.to_string())
+    let bytes = writer.into_inner().map_err(|e| e.to_string())?;
+    Ok(bytes)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -554,6 +1524,8 @@ pub struct Settings {
     #[serde(default)]
     pub is_configured: Option<bool>,
     pub company_name: String,
+    #[serde(default, alias = "maticniBroj")]
+    pub registration_number: String,
     pub pib: String,
     pub address: String,
     pub bank_account: String,
@@ -587,6 +1559,8 @@ fn default_smtp_use_tls() -> bool {
 pub struct SettingsPatch {
     pub is_configured: Option<bool>,
     pub company_name: Option<String>,
+    #[serde(default, alias = "maticniBroj")]
+    pub registration_number: Option<String>,
     pub pib: Option<String>,
     pub address: Option<String>,
     pub bank_account: Option<String>,
@@ -609,6 +1583,8 @@ pub struct SettingsPatch {
 pub struct Client {
     pub id: String,
     pub name: String,
+    #[serde(default, alias = "maticniBroj")]
+    pub registration_number: String,
     pub pib: String,
     pub address: String,
     pub email: String,
@@ -616,8 +1592,11 @@ pub struct Client {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NewClient {
     pub name: String,
+    #[serde(default, alias = "maticniBroj")]
+    pub registration_number: String,
     pub pib: String,
     pub address: String,
     pub email: String,
@@ -628,8 +1607,12 @@ pub struct NewClient {
 pub struct InvoiceItem {
     pub id: String,
     pub description: String,
+    #[serde(default)]
+    pub unit: Option<String>,
     pub quantity: f64,
     pub unit_price: f64,
+    #[serde(default)]
+    pub discount_amount: Option<f64>,
     pub total: f64,
 }
 
@@ -786,6 +1769,7 @@ fn default_settings() -> Settings {
     Settings {
         is_configured: Some(false),
         company_name: "".to_string(),
+        registration_number: "".to_string(),
         pib: "".to_string(),
         address: "".to_string(),
         bank_account: "".to_string(),
@@ -876,6 +1860,7 @@ fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
             id TEXT PRIMARY KEY NOT NULL,
             isConfigured INTEGER,
             companyName TEXT NOT NULL,
+            maticniBroj TEXT NOT NULL DEFAULT '',
             pib TEXT NOT NULL,
             address TEXT NOT NULL,
             bankAccount TEXT NOT NULL,
@@ -898,6 +1883,7 @@ fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
         CREATE TABLE IF NOT EXISTS clients (
             id TEXT PRIMARY KEY NOT NULL,
             name TEXT NOT NULL,
+            maticniBroj TEXT NOT NULL DEFAULT '',
             pib TEXT NOT NULL,
             address TEXT NOT NULL,
             email TEXT NOT NULL,
@@ -951,7 +1937,7 @@ fn apply_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     // v=0 typically means a fresh DB (init_schema created the latest tables).
     if v == 0 {
-        conn.execute_batch("PRAGMA user_version = 6;")?;
+        conn.execute_batch("PRAGMA user_version = 7;")?;
         return Ok(());
     }
 
@@ -1001,6 +1987,16 @@ fn apply_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
              CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date);\n\
              PRAGMA user_version = 6;\n",
         )?;
+        v = 6;
+    }
+
+    if v < 7 {
+        // Nullable columns for older DBs; UI + PDF validation enforce that MB is filled.
+        conn.execute_batch(
+            "ALTER TABLE settings ADD COLUMN maticniBroj TEXT;\n\
+             ALTER TABLE clients ADD COLUMN maticniBroj TEXT;\n\
+             PRAGMA user_version = 7;\n",
+        )?;
     }
 
     Ok(())
@@ -1023,20 +2019,21 @@ fn ensure_settings_row(conn: &Connection) -> Result<(), rusqlite::Error> {
     let data_json = serde_json::to_string(&s).unwrap_or_else(|_| "{}".to_string());
     conn.execute(
         r#"INSERT INTO settings (
-            id, isConfigured, companyName, pib, address, bankAccount, logoUrl,
+            id, isConfigured, companyName, maticniBroj, pib, address, bankAccount, logoUrl,
             invoicePrefix, nextInvoiceNumber, defaultCurrency, language,
             smtpHost, smtpPort, smtpUser, smtpPassword, smtpFrom, smtpUseTls, smtpTlsMode,
             data_json, updatedAt
         ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7,
-            ?8, ?9, ?10, ?11,
-            ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-            ?19, ?20
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
+            ?9, ?10, ?11, ?12,
+            ?13, ?14, ?15, ?16, ?17, ?18, ?19,
+            ?20, ?21
         )"#,
         params![
             SETTINGS_ID,
             s.is_configured.unwrap_or(false) as i32,
             s.company_name,
+            s.registration_number,
             s.pib,
             s.address,
             s.bank_account,
@@ -1126,7 +2123,7 @@ impl DbState {
 fn read_settings_from_conn(conn: &Connection) -> Result<Settings, rusqlite::Error> {
     let row = conn
         .query_row(
-            "SELECT data_json, isConfigured, companyName, pib, address, bankAccount, logoUrl, invoicePrefix, nextInvoiceNumber, defaultCurrency, language, smtpHost, smtpPort, smtpUser, smtpPassword, smtpFrom, smtpUseTls, smtpTlsMode FROM settings WHERE id = ?1",
+            "SELECT data_json, isConfigured, companyName, COALESCE(maticniBroj,''), pib, address, bankAccount, logoUrl, invoicePrefix, nextInvoiceNumber, defaultCurrency, language, smtpHost, smtpPort, smtpUser, smtpPassword, smtpFrom, smtpUseTls, smtpTlsMode FROM settings WHERE id = ?1",
             params![SETTINGS_ID],
             |r| {
                 Ok((
@@ -1138,26 +2135,28 @@ fn read_settings_from_conn(conn: &Connection) -> Result<Settings, rusqlite::Erro
                     r.get::<_, String>(5)?,
                     r.get::<_, String>(6)?,
                     r.get::<_, String>(7)?,
-                    r.get::<_, i64>(8)?,
-                    r.get::<_, String>(9)?,
+                    r.get::<_, String>(8)?,
+                    r.get::<_, i64>(9)?,
                     r.get::<_, String>(10)?,
                     r.get::<_, String>(11)?,
-                    r.get::<_, i64>(12)?,
-                    r.get::<_, String>(13)?,
+                    r.get::<_, String>(12)?,
+                    r.get::<_, i64>(13)?,
                     r.get::<_, String>(14)?,
                     r.get::<_, String>(15)?,
-                    r.get::<_, i64>(16)?,
-                    r.get::<_, String>(17)?,
+                    r.get::<_, String>(16)?,
+                    r.get::<_, i64>(17)?,
+                    r.get::<_, String>(18)?,
                 ))
             },
         )
         .optional()?;
 
-    if let Some((data_json, is_cfg, company, pib, addr, bank, logo, prefix, next, currency, lang, smtp_host, smtp_port, smtp_user, smtp_password, smtp_from, smtp_use_tls, smtp_tls_mode)) = row {
+    if let Some((data_json, is_cfg, company, maticni_broj, pib, addr, bank, logo, prefix, next, currency, lang, smtp_host, smtp_port, smtp_user, smtp_password, smtp_from, smtp_use_tls, smtp_tls_mode)) = row {
         if let Ok(mut parsed) = serde_json::from_str::<Settings>(&data_json) {
             if let Some(v) = is_cfg {
                 parsed.is_configured = Some(v != 0);
             }
+            parsed.registration_number = maticni_broj;
             parsed.smtp_host = smtp_host;
             parsed.smtp_port = smtp_port;
             parsed.smtp_user = smtp_user;
@@ -1177,6 +2176,7 @@ fn read_settings_from_conn(conn: &Connection) -> Result<Settings, rusqlite::Erro
         return Ok(Settings {
             is_configured: is_cfg.map(|v| v != 0),
             company_name: company,
+            registration_number: maticni_broj,
             pib,
             address: addr,
             bank_account: bank,
@@ -1214,6 +2214,9 @@ async fn update_settings(state: tauri::State<'_, DbState>, patch: SettingsPatch)
             }
             if let Some(v) = patch.company_name {
                 current.company_name = v;
+            }
+            if let Some(v) = patch.registration_number {
+                current.registration_number = v;
             }
             if let Some(v) = patch.pib {
                 current.pib = v;
@@ -1287,28 +2290,30 @@ async fn update_settings(state: tauri::State<'_, DbState>, patch: SettingsPatch)
                 r#"UPDATE settings SET
                     isConfigured = ?2,
                     companyName = ?3,
-                    pib = ?4,
-                    address = ?5,
-                    bankAccount = ?6,
-                    logoUrl = ?7,
-                    invoicePrefix = ?8,
-                    nextInvoiceNumber = ?9,
-                    defaultCurrency = ?10,
-                    language = ?11,
-                    smtpHost = ?12,
-                    smtpPort = ?13,
-                    smtpUser = ?14,
-                    smtpPassword = ?15,
-                    smtpFrom = ?16,
-                    smtpUseTls = ?17,
-                    smtpTlsMode = ?18,
-                    data_json = ?19,
-                    updatedAt = ?20
+                    maticniBroj = ?4,
+                    pib = ?5,
+                    address = ?6,
+                    bankAccount = ?7,
+                    logoUrl = ?8,
+                    invoicePrefix = ?9,
+                    nextInvoiceNumber = ?10,
+                    defaultCurrency = ?11,
+                    language = ?12,
+                    smtpHost = ?13,
+                    smtpPort = ?14,
+                    smtpUser = ?15,
+                    smtpPassword = ?16,
+                    smtpFrom = ?17,
+                    smtpUseTls = ?18,
+                    smtpTlsMode = ?19,
+                    data_json = ?20,
+                    updatedAt = ?21
                    WHERE id = ?1"#,
                 params![
                     SETTINGS_ID,
                     is_cfg as i32,
                     current.company_name,
+                    current.registration_number,
                     current.pib,
                     current.address,
                     current.bank_account,
@@ -1391,6 +2396,7 @@ async fn create_client(state: tauri::State<'_, DbState>, input: NewClient) -> Re
             let created = Client {
                 id: Uuid::new_v4().to_string(),
                 name: input.name,
+                registration_number: input.registration_number,
                 pib: input.pib,
                 address: input.address,
                 email: input.email,
@@ -1398,11 +2404,12 @@ async fn create_client(state: tauri::State<'_, DbState>, input: NewClient) -> Re
             };
             let json = serde_json::to_string(&created).unwrap_or_else(|_| "{}".to_string());
             conn.execute(
-                r#"INSERT INTO clients (id, name, pib, address, email, phone, createdAt, data_json)
-                   VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7)"#,
+                r#"INSERT INTO clients (id, name, maticniBroj, pib, address, email, phone, createdAt, data_json)
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8)"#,
                 params![
                     created.id,
                     created.name,
+                    created.registration_number,
                     created.pib,
                     created.address,
                     created.email,
@@ -1439,6 +2446,13 @@ async fn update_client(
             if let Some(v) = patch.get("name").and_then(|v| v.as_str()) {
                 existing.name = v.to_string();
             }
+            if let Some(v) = patch
+                .get("registrationNumber")
+                .and_then(|v| v.as_str())
+                .or_else(|| patch.get("maticniBroj").and_then(|v| v.as_str()))
+            {
+                existing.registration_number = v.to_string();
+            }
             if let Some(v) = patch.get("pib").and_then(|v| v.as_str()) {
                 existing.pib = v.to_string();
             }
@@ -1451,8 +2465,8 @@ async fn update_client(
 
             let json = serde_json::to_string(&existing).unwrap_or_else(|_| "{}".to_string());
             conn.execute(
-                r#"UPDATE clients SET name=?2, pib=?3, address=?4, email=?5, data_json=?6 WHERE id=?1"#,
-                params![id, existing.name, existing.pib, existing.address, existing.email, json],
+                r#"UPDATE clients SET name=?2, maticniBroj=?3, pib=?4, address=?5, email=?6, data_json=?7 WHERE id=?1"#,
+                params![id, existing.name, existing.registration_number, existing.pib, existing.address, existing.email, json],
             )?;
 
             Ok(Some(existing))
@@ -1983,14 +2997,14 @@ async fn send_invoice_email(
         .parse()
         .map_err(|_| "Invalid recipient email address.".to_string())?;
 
-    let (html_body, text_body) = render_invoice_email(&settings, &invoice, include_pdf, body.as_deref());
+    let (html_body, text_body) = render_invoice_email(&settings, &invoice, client.as_ref(), include_pdf, body.as_deref());
     let alternative = MultiPart::alternative()
         .singlepart(SinglePart::plain(text_body))
         .singlepart(SinglePart::html(html_body));
 
     let email = if include_pdf {
         let payload = build_invoice_pdf_payload_from_db(&invoice, client.as_ref(), &settings);
-        let pdf_bytes = generate_pdf_bytes(&payload)?;
+        let pdf_bytes = generate_pdf_bytes(&payload, Some(settings.logo_url.as_str()))?;
         let filename = sanitize_filename(&format!("{}.pdf", invoice.invoice_number));
 
         let attachment = Attachment::new(filename)
@@ -2011,6 +3025,8 @@ async fn send_invoice_email(
             .map_err(|e| format!("Failed to build email: {e}"))?
     };
 
+    let settings = std::sync::Arc::new(settings);
+
     tauri::async_runtime::spawn_blocking(move || {
         let transport = build_smtp_transport(&settings)?;
         transport.send(&email).map_err(|e| {
@@ -2019,22 +3035,45 @@ async fn send_invoice_email(
         })?;
         Ok::<(), String>(())
     })
-    .await
+        .await
     .map_err(|e| e.to_string())??;
 
     Ok(true)
 }
 
 #[tauri::command]
-fn export_invoice_pdf_to_downloads(app: tauri::AppHandle, payload: InvoicePdfPayload) -> Result<String, String> {
-    let bytes = generate_pdf_bytes(&payload)?;
+async fn export_invoice_pdf_to_downloads(
+    state: tauri::State<'_, DbState>,
+    app: tauri::AppHandle,
+    payload: InvoicePdfPayload,
+) -> Result<String, String> {
+    let logo_url = state
+        .with_read("export_invoice_pdf_to_downloads_settings", move |conn| {
+            let settings = read_settings_from_conn(conn)?;
+            Ok(settings.logo_url)
+        })
+        .await?;
+    let logo_url = logo_url.trim().to_string();
+    let bytes = generate_pdf_bytes(&payload, if logo_url.is_empty() { None } else { Some(logo_url.as_str()) })?;
 
     let downloads_dir = app
         .path()
         .download_dir()
         .map_err(|e| e.to_string())?;
 
-    let filename = sanitize_filename(&format!("{}-{}.pdf", payload.invoice_number, payload.client.name));
+    let client_part = payload.client.name.trim();
+    let client_part = if client_part.is_empty() { "client" } else { client_part };
+    // NOTE: in debug builds, add a timestamp suffix to avoid PDF viewer caching false negatives.
+    // (Safe to revert later; release builds keep the stable name.)
+    let mut filename_stem = format!("{}-{}", payload.invoice_number, client_part);
+    if cfg!(debug_assertions) {
+        let ts_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        filename_stem.push_str(&format!("-{}", ts_ms));
+    }
+    let filename = sanitize_filename(&format!("{}.pdf", filename_stem));
     let full_path = downloads_dir.join(filename);
 
     std::fs::write(&full_path, bytes).map_err(|e| e.to_string())?;
@@ -2330,7 +3369,8 @@ fn validate_smtp_settings(s: &Settings) -> Result<(), String> {
 
 fn build_smtp_transport(s: &Settings) -> Result<SmtpTransport, String> {
     validate_smtp_settings(s)?;
-    let port: u16 = s.smtp_port as u16;
+    let port: u16 = u16::try_from(s.smtp_port)
+        .map_err(|_| "SMTP is not configured: invalid port (Settings → Email).".to_string())?;
 
     let host = s.smtp_host.trim();
     if host.is_empty() {
@@ -2409,36 +3449,111 @@ fn read_client_from_conn(conn: &Connection, id: &str) -> Result<Option<Client>, 
 }
 
 fn build_invoice_pdf_payload_from_db(invoice: &Invoice, client: Option<&Client>, settings: &Settings) -> InvoicePdfPayload {
+    let mut computed_subtotal: f64 = 0.0;
+    let mut computed_discount_total: f64 = 0.0;
+    let mut computed_total: f64 = 0.0;
+
+    let items: Vec<InvoicePdfItem> = invoice
+        .items
+        .iter()
+        .map(|it| {
+            let line_subtotal = it.quantity * it.unit_price;
+            let raw_discount = it.discount_amount.unwrap_or(0.0);
+            let line_discount = raw_discount.clamp(0.0, line_subtotal);
+            let line_total = line_subtotal - line_discount;
+
+            computed_subtotal += line_subtotal;
+            computed_discount_total += line_discount;
+            computed_total += line_total;
+
+            InvoicePdfItem {
+                description: it.description.clone(),
+                unit: it.unit.clone().filter(|s| !s.trim().is_empty()),
+                quantity: it.quantity,
+                unit_price: it.unit_price,
+                discount_amount: if line_discount > 0.0 { Some(line_discount) } else { None },
+                total: line_total,
+            }
+        })
+        .collect();
+
     InvoicePdfPayload {
         language: Some(settings.language.clone()),
         invoice_number: invoice.invoice_number.clone(),
         issue_date: invoice.issue_date.clone(),
         service_date: invoice.service_date.clone(),
         currency: invoice.currency.clone(),
-        subtotal: invoice.subtotal,
-        total: invoice.total,
+        subtotal: computed_subtotal,
+        discount_total: computed_discount_total,
+        total: computed_total,
         notes: Some(invoice.notes.clone()),
         company: InvoicePdfCompany {
             company_name: settings.company_name.clone(),
+            registration_number: settings.registration_number.clone(),
             pib: settings.pib.clone(),
             address: settings.address.clone(),
             bank_account: settings.bank_account.clone(),
         },
         client: InvoicePdfClient {
             name: invoice.client_name.clone(),
+            registration_number: client
+                .map(|c| c.registration_number.clone())
+                .filter(|s| !s.trim().is_empty()),
             pib: client.map(|c| c.pib.clone()).filter(|s| !s.trim().is_empty()),
             address: client.map(|c| c.address.clone()).filter(|s| !s.trim().is_empty()),
             email: client.map(|c| c.email.clone()).filter(|s| !s.trim().is_empty()),
         },
-        items: invoice
-            .items
-            .iter()
-            .map(|it| InvoicePdfItem {
-                description: it.description.clone(),
-                quantity: it.quantity,
-                unit_price: it.unit_price,
-                total: it.total,
-            })
-            .collect(),
+        items,
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct MandatoryInvoiceNoteLocale {
+    lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct MandatoryInvoiceNoteTemplates {
+    sr: MandatoryInvoiceNoteLocale,
+    en: MandatoryInvoiceNoteLocale,
+}
+
+static MANDATORY_NOTE_TEMPLATES: OnceLock<MandatoryInvoiceNoteTemplates> = OnceLock::new();
+
+fn mandatory_invoice_note_templates() -> &'static MandatoryInvoiceNoteTemplates {
+    MANDATORY_NOTE_TEMPLATES.get_or_init(|| {
+        let json = include_str!("../../src/shared/mandatoryInvoiceNote.json");
+        serde_json::from_str::<MandatoryInvoiceNoteTemplates>(json)
+            .unwrap_or_else(|_| MandatoryInvoiceNoteTemplates {
+                sr: MandatoryInvoiceNoteLocale { lines: vec![] },
+                en: MandatoryInvoiceNoteLocale { lines: vec![] },
+            })
+    })
+}
+
+fn mandatory_invoice_note_lines(lang: &str, invoice_number: &str) -> Vec<String> {
+    let l = lang.to_ascii_lowercase();
+    let templates = mandatory_invoice_note_templates();
+    let lines = if l.starts_with("en") {
+        &templates.en.lines
+    } else {
+        &templates.sr.lines
+    };
+
+    lines
+        .iter()
+        .map(|line| line.replace("{INVOICE_NUMBER}", invoice_number))
+        .collect()
+}
+
+fn mandatory_invoice_note_text(lang: &str, invoice_number: &str) -> String {
+    mandatory_invoice_note_lines(lang, invoice_number).join("\n")
+}
+
+fn mandatory_invoice_note_html(lang: &str, invoice_number: &str) -> String {
+    mandatory_invoice_note_lines(lang, invoice_number)
+        .into_iter()
+        .map(|l| escape_html(&l))
+        .collect::<Vec<_>>()
+        .join("<br/>")
 }
