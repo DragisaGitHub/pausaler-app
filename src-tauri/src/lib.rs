@@ -837,8 +837,9 @@ fn push_kv_wrapped(
     current_y
 }
 
-fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
-    use printpdf::{Mm, PdfDocument};
+fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Result<Vec<u8>, String> {
+    use printpdf::{Image, ImageTransform, Mm, PdfDocument};
+    use base64::Engine as _;
 
     // Language selection must be explicit (no implicit Serbian fallback).
     let lang_raw = payload.language.as_deref().map(str::trim).filter(|s| !s.is_empty());
@@ -962,30 +963,136 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
     // Flowing cursor
     let mut y = PAGE_H - PAGE_MARGIN_TOP;
 
+    // Document title block (ABOVE the top rule).
+    // Keep this as a single tunable constant so we can shift the entire header down
+    // without changing the internal alignment of the issuer/buyer columns.
+    const TITLE_BLOCK_H: f32 = 14.0;
+    const TITLE_TOP_PAD: f32 = 1.5;
+    let doc_title = "FAKTURA";
+    let doc_title_size: f32 = 14.0;
+    let doc_title_w = text_width_mm_ttf(&ttf_face, doc_title, doc_title_size);
+    let doc_title_x = content_left_x + (content_width - doc_title_w) / 2.0;
+    let doc_title_y = y - TITLE_TOP_PAD;
+    push_line(&layer, &font_bold, doc_title, doc_title_size, doc_title_x, doc_title_y);
+
+    // Shift the header block down; the top rule becomes the separator UNDER the title.
+    y -= TITLE_BLOCK_H;
+
     // Top horizontal rule (as in reference)
     draw_rule_with_thickness(&layer, content_left_x, content_right_x, y, 0.85);
     y -= 8.5;
 
     // A) Parties block (two columns)
-    let left_x = content_left_x;
+    // Optional company logo:
+    // - when present, render in top-left header area
+    // - shift issuer block X to the right of the logo
+    // - keep Y flow unchanged so downstream layout (rules/table/totals) stays identical
+    const LOGO_GAP_X: f32 = 4.0;
+    const LOGO_DPI: f32 = 300.0;
+
+    let left_col_right_x = content_left_x + (content_width / 2.0);
+    let left_col_w_orig = left_col_right_x - content_left_x;
+
+    // Decode a data URL logo (as stored from the UI: data:image/*;base64,...) into an image.
+    let decoded_logo = logo_url
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| {
+            let lower = s.to_ascii_lowercase();
+            if !lower.starts_with("data:") {
+                return None;
+            }
+            let comma = s.find(',')?;
+            let (meta, data) = s.split_at(comma);
+            if !meta.to_ascii_lowercase().contains(";base64") {
+                return None;
+            }
+            let b64 = &data[1..];
+            let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+            let img = printpdf::image_crate::load_from_memory(&bytes).ok()?;
+            Some(img)
+        });
+
+    // Compute issuer anchor X. Default is the original (no-logo) anchor.
+    let mut issuer_left_x = content_left_x;
+
     let right_x = content_left_x + (content_width / 2.0) + 4.0;
     let title_size = 10.0;
     let name_size = 11.0;
     let text_size = 8.3;
     let line_h = 4.0;
 
+    // If we have a logo:
+    // - align its TOP to the same Y as the "Od:" label (issuer_top_y)
+    // - align its BOTTOM to the same Y as the last issuer line ("Tekući račun")
+    // - scale UP/DOWN to fill that exact height (no vertical centering, no size caps)
+    // Then shift the issuer block to the right: logo_right_x + LOGO_GAP_X.
+    if let Some(img) = decoded_logo {
+        let px_w = img.width().max(1) as f32;
+        let px_h = img.height().max(1) as f32;
+
+        let natural_w_mm = px_w / LOGO_DPI * 25.4;
+        let natural_h_mm = px_h / LOGO_DPI * 25.4;
+        let issuer_top_y = y;
+        let y_after_titles = y - 5.0;
+
+        let addr_chars_for_issuer_left_x = |issuer_left_x: f32| {
+            let left_col_w_now = (left_col_right_x - issuer_left_x).max(10.0);
+            ((42.0 * (left_col_w_now / left_col_w_orig)).floor() as usize).clamp(20, 42)
+        };
+
+        // Fixed-point iteration: wrapping -> issuer height -> logo scale -> logo width -> wrapping.
+        let mut logo_w_mm = natural_w_mm;
+        let mut scale = 1.0_f32;
+        let mut issuer_last_line_y = y_after_titles;
+
+        for _ in 0..3 {
+            let next_issuer_left_x = content_left_x + logo_w_mm + LOGO_GAP_X;
+            let addr_chars = addr_chars_for_issuer_left_x(next_issuer_left_x);
+            let addr_lines = split_and_wrap_lines(&payload.company.address, addr_chars);
+
+            // Last issuer line baseline (Tekući račun) based on existing layout steps.
+            issuer_last_line_y = y_after_titles - 4.6 - (addr_lines.len() as f32) * line_h - 2.0 * line_h;
+            let issuer_block_h = issuer_top_y - issuer_last_line_y;
+
+            scale = issuer_block_h / natural_h_mm;
+            logo_w_mm = natural_w_mm * scale;
+        }
+
+        issuer_left_x = content_left_x + logo_w_mm + LOGO_GAP_X;
+
+        // Draw logo so its top aligns to issuer_top_y and its bottom aligns to the last issuer line.
+        let logo_bottom_y = issuer_last_line_y;
+        let image = Image::from_dynamic_image(&img);
+        image.add_to_layer(
+            layer.clone(),
+            ImageTransform {
+                translate_x: Some(Mm(content_left_x)),
+                translate_y: Some(Mm(logo_bottom_y)),
+                rotate: None,
+                scale_x: Some(scale),
+                scale_y: Some(scale),
+                dpi: Some(LOGO_DPI),
+            },
+        );
+    }
+
     // Visual hierarchy: strong section titles; names bold; details regular.
-    push_line(&layer, &font_bold, &labels.issuer_title, title_size, left_x, y);
+    push_line(&layer, &font_bold, &labels.issuer_title, title_size, issuer_left_x, y);
     push_line(&layer, &font_bold, &labels.buyer_title, title_size, right_x, y);
     y -= 5.0;
 
     // Left column: issuer
     let mut y_left = y;
-    push_line(&layer, &font_bold, &payload.company.company_name, name_size, left_x, y_left);
+    push_line(&layer, &font_bold, &payload.company.company_name, name_size, issuer_left_x, y_left);
     y_left -= 4.6;
 
-    for line in split_and_wrap_lines(&payload.company.address, 42) {
-        push_line(&layer, &font, &line, text_size, left_x, y_left);
+    let issuer_addr_max_chars = {
+        let left_col_w_now = (left_col_right_x - issuer_left_x).max(10.0);
+        ((42.0 * (left_col_w_now / left_col_w_orig)).floor() as usize).clamp(20, 42)
+    };
+    for line in split_and_wrap_lines(&payload.company.address, issuer_addr_max_chars) {
+        push_line(&layer, &font, &line, text_size, issuer_left_x, y_left);
         y_left -= line_h;
     }
     // PIB
@@ -994,7 +1101,7 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
         &font,
         &format!("{}: {}", &labels.vat_id, &payload.company.pib),
         text_size,
-        left_x,
+        issuer_left_x,
         y_left,
     );
     y_left -= line_h;
@@ -1004,7 +1111,7 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
         &font,
         &format!("{}: {}", &labels.registration_number, &payload.company.registration_number),
         text_size,
-        left_x,
+        issuer_left_x,
         y_left,
     );
     y_left -= line_h;
@@ -1014,7 +1121,7 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
         &font,
         &format!("{}: {}", &labels.bank_account, &payload.company.bank_account),
         text_size,
-        left_x,
+        issuer_left_x,
         y_left,
     );
     y_left -= line_h;
@@ -1164,12 +1271,23 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload) -> Result<Vec<u8>, String> {
             push_line(&layer, &font, first, text_size, col_service_left, row_top_y);
         }
 
-        // Unit
-        if let Some(unit) = &it.unit {
-            if !unit.trim().is_empty() {
-                push_line(&layer, &font, unit.trim(), text_size, col_unit_left, row_top_y);
+        // Unit (fallback for old invoices; always render a valid value)
+        let unit_display: &'static str = {
+            let raw = it.unit.as_deref().unwrap_or("").trim();
+            if raw.is_empty() {
+                "kom"
+            } else {
+                let lower = raw.to_ascii_lowercase();
+                match lower.as_str() {
+                    "kom" => "kom",
+                    "sat" | "h" => "sat",
+                    "m2" | "m²" | "m^2" => "m²",
+                    "usluga" => "usluga",
+                    _ => "usluga",
+                }
             }
-        }
+        };
+        push_line(&layer, &font, unit_display, text_size, col_unit_left, row_top_y);
 
         // Qty/Price/Discount/Total
         push_line_right_measured(&layer, &font, &ttf_face, &fmt_qty(it.quantity), text_size, qty_right_x, row_top_y);
@@ -2886,7 +3004,7 @@ async fn send_invoice_email(
 
     let email = if include_pdf {
         let payload = build_invoice_pdf_payload_from_db(&invoice, client.as_ref(), &settings);
-        let pdf_bytes = generate_pdf_bytes(&payload)?;
+        let pdf_bytes = generate_pdf_bytes(&payload, Some(settings.logo_url.as_str()))?;
         let filename = sanitize_filename(&format!("{}.pdf", invoice.invoice_number));
 
         let attachment = Attachment::new(filename)
@@ -2924,8 +3042,19 @@ async fn send_invoice_email(
 }
 
 #[tauri::command]
-fn export_invoice_pdf_to_downloads(app: tauri::AppHandle, payload: InvoicePdfPayload) -> Result<String, String> {
-    let bytes = generate_pdf_bytes(&payload)?;
+async fn export_invoice_pdf_to_downloads(
+    state: tauri::State<'_, DbState>,
+    app: tauri::AppHandle,
+    payload: InvoicePdfPayload,
+) -> Result<String, String> {
+    let logo_url = state
+        .with_read("export_invoice_pdf_to_downloads_settings", move |conn| {
+            let settings = read_settings_from_conn(conn)?;
+            Ok(settings.logo_url)
+        })
+        .await?;
+    let logo_url = logo_url.trim().to_string();
+    let bytes = generate_pdf_bytes(&payload, if logo_url.is_empty() { None } else { Some(logo_url.as_str()) })?;
 
     let downloads_dir = app
         .path()

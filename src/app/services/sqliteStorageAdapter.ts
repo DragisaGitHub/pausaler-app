@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
 import type { StorageAdapter } from './storageAdapter';
+import { normalizeInvoiceUnit } from '../types';
 import type { Client, Expense, ExpenseRange, Invoice, Settings } from '../types';
 
 type NewInvoice = {
@@ -16,6 +17,27 @@ type NewInvoice = {
   total: number;
   notes: string;
 };
+
+function normalizeInvoiceUnits(invoice: Invoice): Invoice {
+  return {
+    ...invoice,
+    items: (invoice.items ?? []).map((it: any) => ({
+      ...it,
+      unit: normalizeInvoiceUnit(it?.unit),
+    })),
+  };
+}
+
+function normalizeInvoicePatchUnits(patch: Partial<Invoice>): Partial<Invoice> {
+  if (!('items' in patch) || !patch.items) return patch;
+  return {
+    ...patch,
+    items: (patch.items as any[]).map((it: any) => ({
+      ...it,
+      unit: normalizeInvoiceUnit(it?.unit),
+    })) as any,
+  };
+}
 
 function logSqlError(context: string, err: unknown): void {
   const anyErr = err as any;
@@ -64,27 +86,35 @@ export function createSqliteStorageAdapter(): StorageAdapter {
       invokeLogged<boolean>('deleteClient', 'delete_client', { id }),
 
     // Invoices
-    getAllInvoices: async (): Promise<Invoice[]> => invokeLogged<Invoice[]>('getAllInvoices', 'get_all_invoices'),
+    getAllInvoices: async (): Promise<Invoice[]> => {
+      const res = await invokeLogged<Invoice[]>('getAllInvoices', 'get_all_invoices');
+      return res.map(normalizeInvoiceUnits);
+    },
 
-    listInvoicesRange: async (from: string, to: string): Promise<Invoice[]> =>
-      invokeLogged<Invoice[]>('listInvoicesRange', 'list_invoices_range', { from, to }),
+    listInvoicesRange: async (from: string, to: string): Promise<Invoice[]> => {
+      const res = await invokeLogged<Invoice[]>('listInvoicesRange', 'list_invoices_range', { from, to });
+      return res.map(normalizeInvoiceUnits);
+    },
 
     getInvoiceById: async (id: string): Promise<Invoice | undefined> => {
       const res = await invokeLogged<Invoice | null>('getInvoiceById', 'get_invoice_by_id', { id });
-      return res ?? undefined;
+      return res ? normalizeInvoiceUnits(res) : undefined;
     },
 
     createInvoice: async (data: Omit<Invoice, 'id' | 'createdAt'>): Promise<Invoice> => {
       // Invoice number is generated atomically on the Rust side inside a single transaction.
       // We ignore any invoiceNumber coming from the UI.
       const { invoiceNumber: _ignored, paidAt: _paidAtIgnored, ...rest } = data as Invoice;
-      const input = rest as unknown as NewInvoice;
-      return invokeLogged<Invoice>('createInvoice', 'create_invoice', { input });
+      const normalized = normalizeInvoiceUnits(rest as unknown as Invoice);
+      const input = normalized as unknown as NewInvoice;
+      const created = await invokeLogged<Invoice>('createInvoice', 'create_invoice', { input });
+      return normalizeInvoiceUnits(created);
     },
 
     updateInvoice: async (id: string, patch: Partial<Invoice>): Promise<Invoice | null> => {
-      const res = await invokeLogged<Invoice | null>('updateInvoice', 'update_invoice', { id, patch });
-      return res ?? null;
+      const normalizedPatch = normalizeInvoicePatchUnits(patch);
+      const res = await invokeLogged<Invoice | null>('updateInvoice', 'update_invoice', { id, patch: normalizedPatch });
+      return res ? normalizeInvoiceUnits(res) : null;
     },
 
     deleteInvoice: async (id: string): Promise<boolean> =>

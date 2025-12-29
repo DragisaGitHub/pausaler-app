@@ -11,13 +11,37 @@ export interface Client {
 export interface InvoiceItem {
   id: string;
   description: string;
-  /** Optional unit label (e.g., "h", "pcs"). */
-  unit?: string;
+  unit: InvoiceUnit;
   quantity: number;
   unitPrice: number;
   /** Optional per-line absolute discount amount in invoice currency. */
   discountAmount?: number;
   total: number;
+}
+
+export const INVOICE_UNIT_VALUES = ['kom', 'sat', 'm2', 'usluga'] as const;
+export type InvoiceUnit = (typeof INVOICE_UNIT_VALUES)[number];
+
+export function isInvoiceUnit(value: unknown): value is InvoiceUnit {
+  return (
+    typeof value === 'string' &&
+    (INVOICE_UNIT_VALUES as readonly string[]).includes(value)
+  );
+}
+
+export function normalizeInvoiceUnit(value: unknown): InvoiceUnit {
+  if (typeof value !== 'string') return 'kom';
+  const s = value.trim().toLowerCase();
+  if (!s) return 'kom';
+  if (s === 'm2' || s === 'm²' || s === 'm^2') return 'm2';
+  if (s === 'kom') return 'kom';
+  if (s === 'sat' || s === 'h') return 'sat';
+  if (s === 'usluga') return 'usluga';
+  return 'usluga';
+}
+
+export function invoiceUnitLabel(unit: InvoiceUnit): string {
+  return unit === 'm2' ? 'm²' : unit;
 }
 
 export const INVOICE_STATUS_VALUES = ['DRAFT', 'SENT', 'PAID', 'CANCELLED'] as const;

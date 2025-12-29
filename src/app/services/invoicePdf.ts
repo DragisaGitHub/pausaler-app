@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-shell';
 
+import { normalizeInvoiceUnit } from '../types';
 import type { Client, Invoice, Settings } from '../types';
 
 export type InvoicePdfPayload = {
@@ -93,7 +94,7 @@ export function buildInvoicePdfPayload(args: {
     },
     items: invoice.items.map((it) => ({
       description: it.description,
-      unit: it.unit ? it.unit : null,
+      unit: normalizeInvoiceUnit((it as any).unit),
       quantity: Number(it.quantity),
       unit_price: Number(it.unitPrice),
       discount_amount: it.discountAmount == null ? null : clampMoney(Number(it.discountAmount), 0, Number(it.quantity) * Number(it.unitPrice)),
