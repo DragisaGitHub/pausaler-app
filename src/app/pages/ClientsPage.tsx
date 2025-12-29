@@ -190,6 +190,14 @@ export function ClientsPage() {
             </Form.Item>
 
             <Form.Item
+              label={t('clients.companyRegNumber')}
+              name="registrationNumber"
+              rules={[{ required: true, message: t('clients.companyRegNumberReq') }]}
+            >
+              <Input placeholder="12345678" />
+            </Form.Item>
+
+            <Form.Item
                 label={t('clients.address')}
                 name="address"
                 rules={[{ required: true, message: t('clients.addressReq') }]}

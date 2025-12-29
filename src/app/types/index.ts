@@ -1,6 +1,7 @@
 export interface Client {
   id: string;
   name: string;
+  registrationNumber: string;
   pib: string;
   address: string;
   email: string;
@@ -10,8 +11,12 @@ export interface Client {
 export interface InvoiceItem {
   id: string;
   description: string;
+  /** Optional unit label (e.g., "h", "pcs"). */
+  unit?: string;
   quantity: number;
   unitPrice: number;
+  /** Optional per-line absolute discount amount in invoice currency. */
+  discountAmount?: number;
   total: number;
 }
 
@@ -43,6 +48,7 @@ export interface Settings {
    */
   isConfigured?: boolean;
   companyName: string;
+  registrationNumber: string;
   pib: string;
   address: string;
   bankAccount: string;

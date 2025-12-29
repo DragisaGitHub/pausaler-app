@@ -28,6 +28,7 @@ import {
   exportInvoicePdfToDownloads,
   openGeneratedPdf,
 } from '../services/invoicePdf';
+import { mandatoryInvoiceNoteLines } from '../services/mandatoryInvoiceNote';
 import { useTranslation } from 'react-i18next';
 import { getNumberLocale, normalizeLanguage } from '../i18n';
 
@@ -73,6 +74,11 @@ export function InvoiceViewPage() {
 
   if (!invoice || !settings) return null;
 
+  const mandatoryNoteLines = mandatoryInvoiceNoteLines({
+    language: i18n.language,
+    invoiceNumber: invoice.invoiceNumber,
+  });
+
   const numberLocale = getNumberLocale(normalizeLanguage(i18n.language));
 
   const handleExportPdf = async () => {
@@ -88,7 +94,17 @@ export function InvoiceViewPage() {
       return;
     }
 
+    if (!settings.registrationNumber?.trim()) {
+      message.error(t('invoiceView.missingCompanyRegNumber'));
+      return;
+    }
+
     const latestClient = await storage.getClientById(invoice.clientId);
+
+    if (!latestClient?.registrationNumber?.trim()) {
+      message.error(t('invoiceView.missingClientRegNumber'));
+      return;
+    }
 
     const payload = buildInvoicePdfPayload({ invoice, client: latestClient, settings });
 
@@ -166,6 +182,17 @@ export function InvoiceViewPage() {
 
         if (!settings.isConfigured || !settings.companyName || !settings.pib || !settings.address || !settings.bankAccount) {
           message.error(t('invoiceView.missingCompany'));
+          return;
+        }
+
+        if (!settings.registrationNumber?.trim()) {
+          message.error(t('invoiceView.missingCompanyRegNumber'));
+          return;
+        }
+
+        const latestClient = await storage.getClientById(invoice.clientId);
+        if (!latestClient?.registrationNumber?.trim()) {
+          message.error(t('invoiceView.missingClientRegNumber'));
           return;
         }
       }
@@ -280,6 +307,7 @@ export function InvoiceViewPage() {
               <h2 style={{ margin: 0 }}>{settings.companyName}</h2>
               <div style={{ color: '#666', marginTop: 8 }}>
                 <div>{t('settings.vatId')}: {settings.pib}</div>
+                <div>{t('settings.companyRegNumber')}: {settings.registrationNumber || '-'}</div>
                 <div>{settings.address}</div>
                 <div>{t('settings.bankAccount')}: {settings.bankAccount}</div>
               </div>
@@ -303,6 +331,7 @@ export function InvoiceViewPage() {
               {client && (
                 <>
                   <Descriptions.Item label={t('clients.vatId')}>{client.pib}</Descriptions.Item>
+                  <Descriptions.Item label={t('clients.companyRegNumber')}>{client.registrationNumber || '-'}</Descriptions.Item>
                   <Descriptions.Item label={t('clients.address')}>{client.address}</Descriptions.Item>
                   <Descriptions.Item label={t('clients.email')}>{client.email}</Descriptions.Item>
                 </>
@@ -406,6 +435,12 @@ export function InvoiceViewPage() {
             </div>
           </>
         )}
+
+        <Divider />
+
+        <div style={{ color: '#666', fontSize: 12, textAlign: 'center', whiteSpace: 'pre-line' }}>
+          {mandatoryNoteLines.join('\n')}
+        </div>
 
         <Divider />
 

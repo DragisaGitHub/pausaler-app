@@ -1,0 +1,14 @@
+{
+  "sr": {
+    "lines": [
+      "Oslobođeno od PDV-a po članu 33. Zakona o porezu na dodatu vrednost.",
+      "Prilikom plaćanja obavezno navesti broj fakture: {INVOICE_NUMBER}"
+    ]
+  },
+  "en": {
+    "lines": [
+      "VAT exempt under Article 33 of the Serbian VAT law.",
+      "When paying, please include the invoice number: {INVOICE_NUMBER}"
+    ]
+  }
+}

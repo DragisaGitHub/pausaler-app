@@ -64,6 +64,22 @@ export function NewInvoicePage() {
 
   const isEditMode = !!editId;
 
+  const normalizeItems = (rawItems: InvoiceItem[]): InvoiceItem[] =>
+    rawItems.map((it) => {
+      const unit = it.unit ?? '';
+      const discountAmount = it.discountAmount == null ? undefined : Number(it.discountAmount);
+      const quantity = Number(it.quantity || 0);
+      const unitPrice = Number(it.unitPrice || 0);
+      const lineSubtotal = quantity * unitPrice;
+      const lineDiscount = Math.min(Math.max(Number(discountAmount || 0), 0), lineSubtotal);
+      return {
+        ...it,
+        unit,
+        discountAmount,
+        total: lineSubtotal - lineDiscount,
+      };
+    });
+
   useEffect(() => {
     let cancelled = false;
 
@@ -86,7 +102,7 @@ export function NewInvoicePage() {
           currency: existing.currency,
           notes: existing.notes,
         });
-        if (!cancelled) setItems(existing.items);
+        if (!cancelled) setItems(normalizeItems(existing.items));
         return;
       }
 
@@ -105,7 +121,7 @@ export function NewInvoicePage() {
           currency: existing.currency,
           notes: existing.notes,
         });
-        if (!cancelled) setItems(existing.items);
+        if (!cancelled) setItems(normalizeItems(existing.items));
         return;
       }
 
@@ -118,7 +134,7 @@ export function NewInvoicePage() {
           currency: d.currency,
           notes: d.notes,
         });
-        if (!cancelled) setItems(d.items);
+        if (!cancelled) setItems(normalizeItems(d.items));
         return;
       }
 
@@ -140,8 +156,10 @@ export function NewInvoicePage() {
     const newItem: InvoiceItem = {
       id: Date.now().toString(),
       description: '',
+      unit: '',
       quantity: 1,
       unitPrice: 0,
+      discountAmount: undefined,
       total: 0,
     };
     setItems((prev) => [...prev, newItem]);
@@ -154,14 +172,22 @@ export function NewInvoicePage() {
   const handleItemChange = (
     id: string,
     field: keyof InvoiceItem,
-    value: string | number
+    value: string | number | null
   ) => {
     setItems((prev) =>
       prev.map((item) => {
         if (item.id !== id) return item;
-        const updated: InvoiceItem = { ...item, [field]: value } as InvoiceItem;
-        if (field === 'quantity' || field === 'unitPrice') {
-          updated.total = updated.quantity * updated.unitPrice;
+        const updated: InvoiceItem = { ...item, [field]: value as any } as InvoiceItem;
+
+        if (field === 'discountAmount' && value == null) {
+          updated.discountAmount = undefined;
+        }
+
+        if (field === 'quantity' || field === 'unitPrice' || field === 'discountAmount') {
+          const lineSubtotal = Number(updated.quantity || 0) * Number(updated.unitPrice || 0);
+          const rawDiscount = Number(updated.discountAmount || 0);
+          const lineDiscount = Math.min(Math.max(rawDiscount, 0), lineSubtotal);
+          updated.total = lineSubtotal - lineDiscount;
         }
         return updated;
       })
@@ -169,8 +195,18 @@ export function NewInvoicePage() {
   };
 
   const calculateTotals = () => {
-    const subtotal = items.reduce((sum, item) => sum + item.total, 0);
-    return { subtotal, total: subtotal };
+    const subtotal = items.reduce(
+      (sum, item) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0),
+      0
+    );
+    const discountTotal = items.reduce((sum, item) => {
+      const lineSubtotal = Number(item.quantity || 0) * Number(item.unitPrice || 0);
+      const rawDiscount = Number(item.discountAmount || 0);
+      const lineDiscount = Math.min(Math.max(rawDiscount, 0), lineSubtotal);
+      return sum + lineDiscount;
+    }, 0);
+    const total = subtotal - discountTotal;
+    return { subtotal, total };
   };
 
   const handleAddClient = async (values: Omit<Client, 'id' | 'createdAt'>) => {
@@ -279,7 +315,7 @@ export function NewInvoicePage() {
       title: t('newInvoice.description'),
       dataIndex: 'description',
       key: 'description',
-      width: '40%',
+      width: '34%',
       render: (_: string, record: InvoiceItem) => (
         <Input
           placeholder={t('newInvoice.descriptionPlaceholder')}
@@ -287,6 +323,18 @@ export function NewInvoicePage() {
           onChange={(e) =>
             handleItemChange(record.id, 'description', e.target.value)
           }
+        />
+      ),
+    },
+    {
+      title: t('newInvoice.unit'),
+      dataIndex: 'unit',
+      key: 'unit',
+      width: '12%',
+      render: (_: string, record: InvoiceItem) => (
+        <Input
+          value={record.unit}
+          onChange={(e) => handleItemChange(record.id, 'unit', e.target.value)}
         />
       ),
     },
@@ -311,7 +359,7 @@ export function NewInvoicePage() {
       title: t('newInvoice.unitPrice'),
       dataIndex: 'unitPrice',
       key: 'unitPrice',
-      width: '20%',
+      width: '14%',
       render: (_: number, record: InvoiceItem) => (
         <InputNumber
           min={0}
@@ -328,10 +376,30 @@ export function NewInvoicePage() {
       ),
     },
     {
+      title: t('newInvoice.discountAmount'),
+      dataIndex: 'discountAmount',
+      key: 'discountAmount',
+      width: '15%',
+      render: (_: number, record: InvoiceItem) => (
+        <InputNumber
+          min={0}
+          step={0.01}
+          value={record.discountAmount}
+          onChange={(value) =>
+            handleItemChange(record.id, 'discountAmount', value)
+          }
+          style={{ width: '100%' }}
+          formatter={(value) =>
+            `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+          }
+        />
+      ),
+    },
+    {
       title: t('newInvoice.lineTotal'),
       dataIndex: 'total',
       key: 'total',
-      width: '20%',
+      width: '15%',
       render: (total: number) => (
         <strong>
           {total.toLocaleString(numberLocale, { minimumFractionDigits: 2 })}
@@ -517,6 +585,14 @@ export function NewInvoicePage() {
             rules={[{ required: true, message: t('clients.vatReq') }]}
           >
             <Input placeholder="123456789" />
+          </Form.Item>
+
+          <Form.Item
+            label={t('clients.companyRegNumber')}
+            name="registrationNumber"
+            rules={[{ required: true, message: t('clients.companyRegNumberReq') }]}
+          >
+            <Input placeholder="12345678" />
           </Form.Item>
           <Form.Item
             label={t('clients.address')}

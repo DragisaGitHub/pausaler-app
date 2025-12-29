@@ -3,6 +3,7 @@ import type { Settings } from '../types';
 export const defaultSettings: Settings = {
   isConfigured: false,
   companyName: '',
+  registrationNumber: '',
   pib: '',
   address: '',
   bankAccount: '',

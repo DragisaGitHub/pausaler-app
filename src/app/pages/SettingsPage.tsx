@@ -89,6 +89,14 @@ export function SettingsPage() {
                       </Form.Item>
 
                       <Form.Item
+                        label={t('settings.companyRegNumber')}
+                        name="registrationNumber"
+                        rules={[{ required: true, message: t('settings.companyRegNumberReq') }]}
+                      >
+                        <Input placeholder="12345678" />
+                      </Form.Item>
+
+                      <Form.Item
                         label={t('settings.bankAccount')}
                         name="bankAccount"
                         rules={[{ required: true, message: t('settings.bankReq') }]}
