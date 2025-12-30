@@ -66,6 +66,9 @@ export function createSqliteStorageAdapter(): StorageAdapter {
     generateInvoiceNumber: async (): Promise<string> =>
       invokeLogged<string>('generateInvoiceNumber', 'generate_invoice_number'),
 
+    previewNextInvoiceNumber: async (): Promise<string> =>
+      invokeLogged<string>('previewNextInvoiceNumber', 'preview_next_invoice_number'),
+
     // Clients
     getAllClients: async (): Promise<Client[]> => invokeLogged<Client[]>('getAllClients', 'get_all_clients'),
 

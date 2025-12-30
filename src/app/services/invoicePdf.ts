@@ -3,6 +3,7 @@ import { open } from '@tauri-apps/plugin-shell';
 
 import { normalizeInvoiceUnit } from '../types';
 import type { Client, Invoice, Settings } from '../types';
+import { formatCompanyAddressMultiline } from './companyAddress';
 
 export type InvoicePdfPayload = {
   language: 'sr' | 'en';
@@ -19,14 +20,23 @@ export type InvoicePdfPayload = {
     registration_number: string;
     pib: string;
     address: string;
+    address_line?: string | null;
+    postal_code?: string | null;
+    city?: string | null;
     bank_account: string;
+    email?: string | null;
+    phone?: string | null;
   };
   client: {
     name: string;
     registration_number?: string | null;
     pib?: string | null;
     address?: string | null;
+    address_line?: string | null;
+    postal_code?: string | null;
+    city?: string | null;
     email?: string | null;
+    phone?: string | null;
   };
   items: Array<{
     description: string;
@@ -82,15 +92,24 @@ export function buildInvoicePdfPayload(args: {
       company_name: settings.companyName,
       registration_number: settings.registrationNumber,
       pib: settings.pib,
-      address: settings.address,
+      address: formatCompanyAddressMultiline(settings),
+      address_line: settings.companyAddressLine,
+      postal_code: settings.companyPostalCode,
+      city: settings.companyCity,
       bank_account: settings.bankAccount,
+      email: settings.companyEmail?.trim() ? settings.companyEmail.trim() : null,
+      phone: settings.companyPhone?.trim() ? settings.companyPhone.trim() : null,
     },
     client: {
       name: invoice.clientName,
       registration_number: client?.registrationNumber ?? null,
       pib: client?.pib ?? null,
       address: client?.address ?? null,
+      address_line: client?.address ?? null,
+      postal_code: (client as any)?.postalCode ?? null,
+      city: (client as any)?.city ?? null,
       email: client?.email ?? null,
+      phone: (client as any)?.phone ?? null,
     },
     items: invoice.items.map((it) => ({
       description: it.description,

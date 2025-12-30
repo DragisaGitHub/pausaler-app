@@ -56,6 +56,7 @@ export function NewInvoicePage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [isClientModalVisible, setIsClientModalVisible] = useState(false);
   const [clientForm] = Form.useForm();
+  const [invoiceNumberPreview, setInvoiceNumberPreview] = useState<string | null>(null);
 
   const editId = useMemo(() => {
     if (!state) return undefined;
@@ -72,6 +73,36 @@ export function NewInvoicePage() {
   }, [state]);
 
   const isEditMode = !!editId;
+
+  useEffect(() => {
+    if (isEditMode) return;
+
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const preview = await storage.previewNextInvoiceNumber();
+        if (cancelled) return;
+        setInvoiceNumberPreview(preview);
+      } catch (e) {
+        if (cancelled) return;
+        console.error('Failed to preview next invoice number', e);
+        setInvoiceNumberPreview(null);
+      }
+    };
+
+    void load();
+
+    const onFocus = () => {
+      void load();
+    };
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [isEditMode]);
 
   const normalizeItems = (rawItems: InvoiceItem[]): InvoiceItem[] =>
     rawItems.map((it) => {
@@ -298,14 +329,14 @@ export function NewInvoicePage() {
         total: totals.total,
         notes: values.notes || '',
       };
-      await storage.createInvoice(invoice);
+      const created = await storage.createInvoice(invoice);
       message.success(t('newInvoice.created'));
 
       if (exportPDF) {
         message.info(t('newInvoice.exportInDev'));
       }
 
-      navigate('/');
+      navigate(`/invoices/view/${created.id}`);
     } catch (error) {
       const anyError = error as any;
       if (anyError?.errorFields) {
@@ -470,7 +501,13 @@ export function NewInvoicePage() {
 
       <Form form={form} layout="vertical" size="large">
         <Card title={t('newInvoice.basicInfo')} style={{ marginBottom: 24 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: isEditMode ? '1fr 1fr' : '1fr 1fr 1fr',
+              gap: 16,
+            }}
+          >
             <Form.Item
               label={t('newInvoice.selectClient')}
               name="clientId"
@@ -508,6 +545,19 @@ export function NewInvoicePage() {
                 options={CURRENCY_VALUES.map((c) => ({ value: c, label: t(`currencies.${c}`) }))}
               />
             </Form.Item>
+
+            {!isEditMode && (
+              <Form.Item
+                label={t('newInvoice.invoiceNumberPreviewLabel')}
+                help={t('newInvoice.invoiceNumberPreviewHelp')}
+              >
+                <Input
+                  disabled
+                  value={invoiceNumberPreview ?? ''}
+                  placeholder={t('common.loading')}
+                />
+              </Form.Item>
+            )}
 
             <Form.Item
               label={t('newInvoice.issueDate')}

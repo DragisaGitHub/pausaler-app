@@ -3,7 +3,10 @@ export interface Client {
   name: string;
   registrationNumber: string;
   pib: string;
+  /** Street + number (legacy field name kept for backward compatibility). */
   address: string;
+  city: string;
+  postalCode: string;
   email: string;
   createdAt: string;
 }
@@ -74,7 +77,11 @@ export interface Settings {
   companyName: string;
   registrationNumber: string;
   pib: string;
-  address: string;
+  companyAddressLine: string;
+  companyCity: string;
+  companyPostalCode: string;
+  companyEmail: string;
+  companyPhone: string;
   bankAccount: string;
   logoUrl: string;
   invoicePrefix: string;

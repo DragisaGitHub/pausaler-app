@@ -1,0 +1,46 @@
+{
+  "sr": {
+    "yourCompany": "Vaša firma",
+    "invoice": "Faktura",
+
+    "introWithPdf": "Faktura je priložena u PDF formatu.",
+    "introWithoutPdf": "Faktura je poslata bez PDF priloga.",
+
+    "company": "Firma",
+    "companyRegistrationNumber": "Matični broj",
+    "client": "Komitent",
+    "clientRegistrationNumber": "Matični broj komitenta",
+    "vatId": "PIB",
+    "invoiceNumber": "Broj fakture",
+    "issueDate": "Datum izdavanja",
+    "dueDate": "Rok plaćanja",
+    "total": "Ukupno",
+    "personalNote": "Lična poruka",
+    "personalNoteWithColon": "Lična poruka:",
+    "bankAccount": "Tekući račun",
+
+    "generatedFromApp": "Generisano iz Pausaler aplikacije."
+  },
+  "en": {
+    "yourCompany": "Your company",
+    "invoice": "Invoice",
+
+    "introWithPdf": "The invoice is attached as a PDF.",
+    "introWithoutPdf": "The invoice was sent without the PDF attachment.",
+
+    "company": "Company",
+    "companyRegistrationNumber": "Registration number",
+    "client": "Client",
+    "clientRegistrationNumber": "Client registration number",
+    "vatId": "VAT ID",
+    "invoiceNumber": "Invoice number",
+    "issueDate": "Issue date",
+    "dueDate": "Due date",
+    "total": "Total",
+    "personalNote": "Personal note",
+    "personalNoteWithColon": "Personal note:",
+    "bankAccount": "Bank account",
+
+    "generatedFromApp": "Generated from Pausaler app."
+  }
+}

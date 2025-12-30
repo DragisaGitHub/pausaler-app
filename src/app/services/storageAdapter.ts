@@ -11,6 +11,7 @@ export interface StorageAdapter {
   getSettings(): Promise<Settings>;
   updateSettings(patch: Partial<Settings>): Promise<Settings>;
   generateInvoiceNumber(): Promise<string>;
+  previewNextInvoiceNumber(): Promise<string>;
 
   // Clients
   getAllClients(): Promise<Client[]>;

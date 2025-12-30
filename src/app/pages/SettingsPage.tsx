@@ -5,12 +5,14 @@ import { Settings, CURRENCY_VALUES } from '../types';
 import { useSettings } from '../hooks/useSettings';
 import { useTranslation } from 'react-i18next';
 import i18n, { normalizeLanguage } from '../i18n';
+import { useSerbiaCities } from '../hooks/useSerbiaCities';
 
 export function SettingsPage() {
   const { t } = useTranslation();
   const [form] = Form.useForm<Settings>();
   const { settings, loading, save } = useSettings();
   const [logoUrl, setLogoUrl] = useState('');
+  const serbiaCities = useSerbiaCities();
 
   useEffect(() => {
     if (!settings) return;
@@ -105,13 +107,91 @@ export function SettingsPage() {
                       </Form.Item>
                     </div>
 
-                    <Form.Item
-                      label={t('settings.address')}
-                      name="address"
-                      rules={[{ required: true, message: t('settings.addressReq') }]}
-                    >
-                      <Input placeholder={t('settings.addressPlaceholder')} />
-                    </Form.Item>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                      <Form.Item
+                        label={t('settings.companyAddressLine')}
+                        name="companyAddressLine"
+                        rules={[{ required: true, message: t('settings.companyAddressLineReq') }]}
+                        style={{ gridColumn: '1 / -1' }}
+                      >
+                        <Input placeholder={t('settings.companyAddressLinePlaceholder')} />
+                      </Form.Item>
+
+                      <Form.Item
+                        label={t('settings.companyCity')}
+                        name="companyCity"
+                        rules={[{ required: true, message: t('settings.companyCityReq') }]}
+                      >
+                        <Select
+                          showSearch
+                          allowClear
+                          placeholder={t('settings.companyCityPlaceholder')}
+                          loading={serbiaCities.loading}
+                          options={serbiaCities.options}
+                          filterOption={false}
+                          onSearch={serbiaCities.search}
+                          onClear={() => {
+                            form.setFieldValue('companyPostalCode', '');
+                          }}
+                          onSelect={(_, option) => {
+                            const postalCode = String((option as any)?.postalCode ?? '').trim();
+                            if (postalCode) {
+                              form.setFieldValue('companyPostalCode', postalCode);
+                            }
+                          }}
+                        />
+                      </Form.Item>
+
+                      <Form.Item
+                        label={t('settings.companyPostalCode')}
+                        name="companyPostalCode"
+                        rules={[
+                          { required: true, message: t('settings.companyPostalCodeReq') },
+                          () => ({
+                            validator(_, value) {
+                              const v = String(value ?? '').trim();
+                              if (!v) return Promise.resolve();
+                              if (!/^[0-9-]+$/.test(v)) {
+                                return Promise.reject(new Error(t('settings.companyPostalCodeInvalid')));
+                              }
+                              return Promise.resolve();
+                            },
+                          }),
+                        ]}
+                      >
+                        <Input placeholder={t('settings.companyPostalCodePlaceholder')} />
+                      </Form.Item>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                      <Form.Item
+                        label={t('settings.companyEmail')}
+                        name="companyEmail"
+                        rules={[{ type: 'email', message: t('settings.companyEmailInvalid') }]}
+                      >
+                        <Input placeholder={t('settings.companyEmailPlaceholder')} />
+                      </Form.Item>
+
+                      <Form.Item
+                        label={t('settings.companyPhone')}
+                        name="companyPhone"
+                        rules={[
+                          () => ({
+                            validator(_, value) {
+                              const raw = String(value ?? '').trim();
+                              if (!raw) return Promise.resolve();
+                              const compact = raw.replace(/[\s\-()]/g, '');
+                              if (compact.length < 6) {
+                                return Promise.reject(new Error(t('settings.companyPhoneInvalid')));
+                              }
+                              return Promise.resolve();
+                            },
+                          }),
+                        ]}
+                      >
+                        <Input placeholder={t('settings.companyPhonePlaceholder')} />
+                      </Form.Item>
+                    </div>
 
                     <Form.Item label={t('settings.logo')}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>

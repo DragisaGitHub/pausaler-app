@@ -89,7 +89,15 @@ export function InvoiceViewPage() {
       return;
     }
 
-    if (!settings.isConfigured || !settings.companyName || !settings.pib || !settings.address || !settings.bankAccount) {
+    if (
+      !settings.isConfigured ||
+      !settings.companyName ||
+      !settings.pib ||
+      !settings.companyAddressLine ||
+      !settings.companyCity ||
+      !settings.companyPostalCode ||
+      !settings.bankAccount
+    ) {
       message.error(t('invoiceView.missingCompany'));
       return;
     }
@@ -180,7 +188,15 @@ export function InvoiceViewPage() {
           return;
         }
 
-        if (!settings.isConfigured || !settings.companyName || !settings.pib || !settings.address || !settings.bankAccount) {
+        if (
+          !settings.isConfigured ||
+          !settings.companyName ||
+          !settings.pib ||
+          !settings.companyAddressLine ||
+          !settings.companyCity ||
+          !settings.companyPostalCode ||
+          !settings.bankAccount
+        ) {
           message.error(t('invoiceView.missingCompany'));
           return;
         }
@@ -300,17 +316,35 @@ export function InvoiceViewPage() {
               {settings.logoUrl && (
                 <img
                   src={settings.logoUrl}
-                  alt="Company logo"
+                  alt=""
                   style={{ maxHeight: 80, marginBottom: 16, objectFit: 'contain' }}
                 />
               )}
               <h2 style={{ margin: 0 }}>{settings.companyName}</h2>
-              <div style={{ color: '#666', marginTop: 8 }}>
-                <div>{t('settings.vatId')}: {settings.pib}</div>
-                <div>{t('settings.companyRegNumber')}: {settings.registrationNumber || '-'}</div>
-                <div>{settings.address}</div>
-                <div>{t('settings.bankAccount')}: {settings.bankAccount}</div>
-              </div>
+              {(() => {
+                const addressLine = (settings.companyAddressLine ?? '').trim();
+                const postalCode = (settings.companyPostalCode ?? '').trim();
+                const city = (settings.companyCity ?? '').trim();
+                const postalAndCity = [postalCode, city].filter(Boolean).join(' ');
+                const addressFull = [addressLine, postalAndCity].filter(Boolean).join(', ');
+
+                const registrationNumber = (settings.registrationNumber ?? '').trim();
+                const companyEmail = (settings.companyEmail ?? '').trim();
+                const companyPhone = (settings.companyPhone ?? '').trim();
+
+                return (
+                  <Descriptions column={1} size="small" style={{ marginTop: 8 }}>
+                    <Descriptions.Item label={t('settings.vatId')}>{settings.pib}</Descriptions.Item>
+                    <Descriptions.Item label={t('settings.companyRegNumber')}>
+                      {registrationNumber || '-'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label={t('settings.address')}>{addressFull || '-'}</Descriptions.Item>
+                    <Descriptions.Item label={t('settings.companyEmail')}>{companyEmail || '-'}</Descriptions.Item>
+                    <Descriptions.Item label={t('settings.companyPhone')}>{companyPhone || '-'}</Descriptions.Item>
+                    <Descriptions.Item label={t('settings.bankAccount')}>{settings.bankAccount}</Descriptions.Item>
+                  </Descriptions>
+                );
+              })()}
             </div>
             <div style={{ textAlign: 'right' }}>
               <h1 style={{ margin: 0, fontSize: 32, color: '#1890ff' }}>{t('invoiceView.invoice')}</h1>
@@ -332,7 +366,18 @@ export function InvoiceViewPage() {
                 <>
                   <Descriptions.Item label={t('clients.vatId')}>{client.pib}</Descriptions.Item>
                   <Descriptions.Item label={t('clients.companyRegNumber')}>{client.registrationNumber || '-'}</Descriptions.Item>
-                  <Descriptions.Item label={t('clients.address')}>{client.address}</Descriptions.Item>
+                  <Descriptions.Item label={t('clients.address')}>
+                    {(() => {
+                      const addressLine = (client.address ?? '').trim();
+                      const postalCode = (client.postalCode ?? '').trim();
+                      const city = (client.city ?? '').trim();
+
+                      // If either city or postal code is missing, show street-only (as requested).
+                      if (!postalCode || !city) return addressLine || '-';
+
+                      return `${addressLine}, ${postalCode} ${city}`;
+                    })()}
+                  </Descriptions.Item>
                   <Descriptions.Item label={t('clients.email')}>{client.email}</Descriptions.Item>
                 </>
               )}

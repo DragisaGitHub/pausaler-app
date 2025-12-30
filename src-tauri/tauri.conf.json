@@ -28,7 +28,8 @@
     "active": true,
     "targets": "all",
     "resources": [
-      "assets/DejaVuSans.ttf"
+      "assets/DejaVuSans.ttf",
+      "assets/data/serbia_zip_codes.json"
     ],
     "icon": [
       "icons/32x32.png",
