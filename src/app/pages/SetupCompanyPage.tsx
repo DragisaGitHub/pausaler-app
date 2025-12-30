@@ -10,7 +10,10 @@ type SetupCompanyPageProps = {
   onCompleted?: () => void;
 };
 
-type SetupCompanyForm = Pick<Settings, 'companyName' | 'registrationNumber' | 'pib' | 'address' | 'bankAccount'>;
+type SetupCompanyForm = Pick<
+  Settings,
+  'companyName' | 'registrationNumber' | 'pib' | 'companyAddressLine' | 'companyCity' | 'companyPostalCode' | 'bankAccount'
+>;
 
 const storage = getStorage();
 
@@ -105,13 +108,44 @@ export function SetupCompanyPage({ onCompleted }: SetupCompanyPageProps) {
             </Form.Item>
           </div>
 
-          <Form.Item
-            label={t('settings.address')}
-            name="address"
-            rules={[{ required: true, message: t('settings.addressReq') }]}
-          >
-            <Input placeholder={t('settings.addressPlaceholder')} />
-          </Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <Form.Item
+              label={t('settings.companyAddressLine')}
+              name="companyAddressLine"
+              rules={[{ required: true, message: t('settings.companyAddressLineReq') }]}
+              style={{ gridColumn: '1 / -1' }}
+            >
+              <Input placeholder={t('settings.companyAddressLinePlaceholder')} />
+            </Form.Item>
+
+            <Form.Item
+              label={t('settings.companyCity')}
+              name="companyCity"
+              rules={[{ required: true, message: t('settings.companyCityReq') }]}
+            >
+              <Input placeholder={t('settings.companyCityPlaceholder')} />
+            </Form.Item>
+
+            <Form.Item
+              label={t('settings.companyPostalCode')}
+              name="companyPostalCode"
+              rules={[
+                { required: true, message: t('settings.companyPostalCodeReq') },
+                () => ({
+                  validator(_, value) {
+                    const v = String(value ?? '').trim();
+                    if (!v) return Promise.resolve();
+                    if (!/^[0-9-]+$/.test(v)) {
+                      return Promise.reject(new Error(t('settings.companyPostalCodeInvalid')));
+                    }
+                    return Promise.resolve();
+                  },
+                }),
+              ]}
+            >
+              <Input placeholder={t('settings.companyPostalCodePlaceholder')} />
+            </Form.Item>
+          </div>
 
           <Form.Item label={t('settings.logo')}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>

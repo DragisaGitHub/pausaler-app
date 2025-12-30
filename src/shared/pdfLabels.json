@@ -9,8 +9,10 @@
 
     "vatId": "PIB",
     "registrationNumber": "Matični broj",
+    "address": "Adresa",
     "bankAccount": "Tekući račun",
-    "email": "E-mail",
+    "email": "Email",
+    "phone": "Telefon",
 
     "invoiceNumber": "Broj fakture",
     "issueDate": "Datum izdavanja",
@@ -61,8 +63,10 @@
 
     "vatId": "VAT ID",
     "registrationNumber": "Registration number",
+    "address": "Address",
     "bankAccount": "Bank account",
     "email": "Email",
+    "phone": "Phone",
 
     "invoiceNumber": "Invoice number",
     "issueDate": "Issue date",

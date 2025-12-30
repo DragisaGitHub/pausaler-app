@@ -89,7 +89,15 @@ export function InvoicesPage() {
         }
 
         const settings = await storage.getSettings();
-        if (!settings.isConfigured || !settings.companyName || !settings.pib || !settings.address || !settings.bankAccount) {
+        if (
+            !settings.isConfigured ||
+            !settings.companyName ||
+            !settings.pib ||
+            !settings.companyAddressLine ||
+            !settings.companyCity ||
+            !settings.companyPostalCode ||
+            !settings.bankAccount
+        ) {
             message.error(t('invoiceView.missingCompany'));
             return;
         }

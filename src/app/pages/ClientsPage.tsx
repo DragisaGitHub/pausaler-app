@@ -9,17 +9,21 @@ import {
   Input,
   Popconfirm,
   Empty,
+  Select,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { Client } from '../types';
 import {useClients} from "../hooks/useClients.ts";
 import { useTranslation } from 'react-i18next';
+import { useSerbiaCities } from '../hooks/useSerbiaCities';
 
 export function ClientsPage() {
   const { t } = useTranslation();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [form] = Form.useForm();
+
+  const serbiaCities = useSerbiaCities();
 
   const { clients, createClient, updateClient, deleteClient } = useClients();
 
@@ -82,6 +86,14 @@ export function ClientsPage() {
       title: t('clients.address'),
       dataIndex: 'address',
       key: 'address',
+      render: (_: unknown, record: Client) => {
+        const line1 = record.address?.trim();
+        const line2 = [record.postalCode?.trim(), record.city?.trim()]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+        return [line1, line2].filter(Boolean).join(', ');
+      },
     },
     {
       title: t('clients.email'),
@@ -198,12 +210,59 @@ export function ClientsPage() {
             </Form.Item>
 
             <Form.Item
-                label={t('clients.address')}
-                name="address"
-                rules={[{ required: true, message: t('clients.addressReq') }]}
+              label={t('clients.addressLine1')}
+              name="address"
+              rules={[{ required: true, message: t('clients.addressLine1Req') }]}
             >
-              <Input placeholder="Ulica i broj, grad" />
+              <Input placeholder={t('clients.addressLine1Placeholder')} />
             </Form.Item>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <Form.Item
+                label={t('clients.city')}
+                name="city"
+                rules={[{ required: true, message: t('clients.cityReq') }]}
+              >
+                <Select
+                  showSearch
+                  allowClear
+                  placeholder={t('clients.cityPlaceholder')}
+                  loading={serbiaCities.loading}
+                  options={serbiaCities.options}
+                  filterOption={false}
+                  onSearch={serbiaCities.search}
+                  onClear={() => {
+                    form.setFieldValue('postalCode', '');
+                  }}
+                  onSelect={(_, option) => {
+                    const postalCode = String((option as any)?.postalCode ?? '').trim();
+                    if (postalCode) {
+                      form.setFieldValue('postalCode', postalCode);
+                    }
+                  }}
+                />
+              </Form.Item>
+
+              <Form.Item
+                label={t('clients.postalCode')}
+                name="postalCode"
+                rules={[
+                  { required: true, message: t('clients.postalCodeReq') },
+                  () => ({
+                    validator(_, value) {
+                      const v = String(value ?? '').trim();
+                      if (!v) return Promise.resolve();
+                      if (!/^[0-9-]+$/.test(v)) {
+                        return Promise.reject(new Error(t('clients.postalCodeInvalid')));
+                      }
+                      return Promise.resolve();
+                    },
+                  }),
+                ]}
+              >
+                <Input placeholder={t('clients.postalCodePlaceholder')} />
+              </Form.Item>
+            </div>
 
             <Form.Item
                 label={t('clients.email')}

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
+use tauri::path::BaseDirectory;
 use std::{
+    fs,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
@@ -17,6 +19,65 @@ use lettre::transport::smtp::client::{Tls, TlsParameters};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{SmtpTransport, Transport};
 
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+#[serde(rename_all = "camelCase")]
+struct InvoiceEmailLabelsLocale {
+    your_company: String,
+    invoice: String,
+    intro_with_pdf: String,
+    intro_without_pdf: String,
+    #[allow(dead_code)]
+    company: String,
+    #[allow(dead_code)]
+    company_registration_number: String,
+    #[allow(dead_code)]
+    client: String,
+    #[allow(dead_code)]
+    client_registration_number: String,
+    vat_id: String,
+    invoice_number: String,
+    issue_date: String,
+    due_date: String,
+    total: String,
+    personal_note: String,
+    personal_note_with_colon: String,
+    bank_account: String,
+    generated_from_app: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct InvoiceEmailLabelsFile {
+    sr: InvoiceEmailLabelsLocale,
+    en: InvoiceEmailLabelsLocale,
+}
+
+static INVOICE_EMAIL_LABELS: OnceLock<Result<InvoiceEmailLabelsFile, String>> = OnceLock::new();
+
+fn invoice_email_labels(lang: &str) -> Result<InvoiceEmailLabelsLocale, String> {
+    let file = INVOICE_EMAIL_LABELS.get_or_init(|| {
+        let json = include_str!("../../src/shared/invoiceEmailLabels.json");
+        serde_json::from_str::<InvoiceEmailLabelsFile>(json)
+            .map_err(|e| format!("Failed to parse embedded src/shared/invoiceEmailLabels.json: {e}"))
+    });
+
+    let file = file.as_ref().map_err(|e| e.clone())?;
+
+    let l = lang.to_ascii_lowercase();
+    if l.starts_with("en") {
+        Ok(file.en.clone())
+    } else {
+        Ok(file.sr.clone())
+    }
+}
+
+fn sanity_check_embedded_invoice_email_labels() {
+    for lang in ["sr", "en"] {
+        if let Err(e) = invoice_email_labels(lang) {
+            eprintln!("[labels] invoiceEmailLabels.json unavailable ({lang}): {e}");
+        }
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InvoicePdfCompany {
     pub company_name: String,
@@ -24,7 +85,17 @@ pub struct InvoicePdfCompany {
     pub registration_number: String,
     pub pib: String,
     pub address: String,
+    #[serde(default, alias = "addressLine")]
+    pub address_line: Option<String>,
+    #[serde(default, alias = "postalCode")]
+    pub postal_code: Option<String>,
+    #[serde(default)]
+    pub city: Option<String>,
     pub bank_account: String,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub phone: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,7 +105,15 @@ pub struct InvoicePdfClient {
     pub registration_number: Option<String>,
     pub pib: Option<String>,
     pub address: Option<String>,
+    #[serde(default, alias = "addressLine")]
+    pub address_line: Option<String>,
+    #[serde(default, alias = "postalCode")]
+    pub postal_code: Option<String>,
+    #[serde(default)]
+    pub city: Option<String>,
     pub email: Option<String>,
+    #[serde(default)]
+    pub phone: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,6 +192,133 @@ fn escape_html(input: &str) -> String {
     out
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum SerbiaZipCodeId {
+    Num(i64),
+    Str(String),
+}
+
+impl SerbiaZipCodeId {
+    fn as_string(&self) -> String {
+        match self {
+            SerbiaZipCodeId::Num(n) => n.to_string(),
+            SerbiaZipCodeId::Str(s) => s.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SerbiaZipCodeRaw {
+    city: String,
+    #[serde(rename = "_id")]
+    id: SerbiaZipCodeId,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SerbiaCityDto {
+    pub city: String,
+    pub postal_code: String,
+}
+
+static SERBIA_ZIP_CODES_CACHE: OnceLock<Result<Vec<SerbiaCityDto>, String>> = OnceLock::new();
+
+fn normalize_serbian_latin(input: &str) -> String {
+    let lower = input.to_lowercase();
+    let mut out = String::with_capacity(lower.len());
+    for ch in lower.chars() {
+        match ch {
+            'č' | 'ć' => out.push('c'),
+            'š' => out.push('s'),
+            'ž' => out.push('z'),
+            'đ' => out.push_str("dj"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn resolve_serbia_zip_codes_path(app: &tauri::AppHandle) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(p) = app
+        .path()
+        .resolve("assets/data/serbia_zip_codes.json", BaseDirectory::Resource)
+    {
+        candidates.push(p);
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("assets").join("data").join("serbia_zip_codes.json"));
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("assets").join("data").join("serbia_zip_codes.json"));
+        candidates.push(
+            cwd.join("src-tauri")
+                .join("assets")
+                .join("data")
+                .join("serbia_zip_codes.json"),
+        );
+    }
+
+    candidates
+}
+
+fn load_serbia_zip_codes_from_disk(app: &tauri::AppHandle) -> Result<Vec<SerbiaCityDto>, String> {
+    let candidates = resolve_serbia_zip_codes_path(app);
+    let path = candidates
+        .into_iter()
+        .find(|p| p.exists())
+        .ok_or_else(|| "Unable to locate serbia_zip_codes.json (bundle resource missing?)".to_string())?;
+
+    let json = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read serbia_zip_codes.json at {}: {e}", path.display()))?;
+
+    let mut rows = serde_json::from_str::<Vec<SerbiaZipCodeRaw>>(&json)
+        .map_err(|e| format!("Failed to parse serbia_zip_codes.json: {e}"))?
+        .into_iter()
+        .map(|r| SerbiaCityDto {
+            city: r.city.trim().to_string(),
+            postal_code: r.id.as_string().trim().to_string(),
+        })
+        .filter(|r| !r.city.trim().is_empty() && !r.postal_code.trim().is_empty())
+        .collect::<Vec<_>>();
+
+    rows.sort_by(|a, b| a.city.cmp(&b.city).then_with(|| a.postal_code.cmp(&b.postal_code)));
+    Ok(rows)
+}
+
+fn serbia_zip_codes(app: &tauri::AppHandle) -> Result<&'static Vec<SerbiaCityDto>, String> {
+    match SERBIA_ZIP_CODES_CACHE.get_or_init(|| load_serbia_zip_codes_from_disk(app)) {
+        Ok(v) => Ok(v),
+        Err(e) => Err(e.clone()),
+    }
+}
+
+#[tauri::command]
+fn list_serbia_cities(app: tauri::AppHandle, search: Option<String>) -> Result<Vec<SerbiaCityDto>, String> {
+    let rows = serbia_zip_codes(&app)?;
+    let q = search
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(normalize_serbian_latin);
+
+    if let Some(q) = q {
+        Ok(rows
+            .iter()
+            .cloned()
+            .filter(|r| normalize_serbian_latin(&r.city).contains(&q))
+            .collect())
+    } else {
+        Ok(rows.clone())
+    }
+}
+
 /// Renders the invoice email body as (html, text).
 ///
 /// - Clean business-style layout, email-client-safe (tables + inline CSS).
@@ -121,19 +327,28 @@ fn escape_html(input: &str) -> String {
 fn render_invoice_email(
     settings: &Settings,
     invoice: &Invoice,
-    client: Option<&Client>,
+    _client: Option<&Client>,
     include_pdf: bool,
     personal_note: Option<&str>,
-) -> (String, String) {
+) -> Result<(String, String), String> {
     let lang = settings.language.to_ascii_lowercase();
-    let tr = |sr: &'static str, en: &'static str| if lang.starts_with("en") { en } else { sr };
+    let labels = invoice_email_labels(&lang)?;
 
-    let company_name = settings.company_name.trim();
-    let company_name = if company_name.is_empty() {
-        tr("Vaša firma", "Your company")
-    } else {
-        company_name
+    // Fail fast if required labels are missing/empty (no silent fallbacks).
+    let require_label = |key: &str, value: &str| -> Result<(), String> {
+        if value.trim().is_empty() {
+            return Err(format!("Missing required email label: {key}"));
+        }
+        Ok(())
     };
+    require_label("vatId", &labels.vat_id)?;
+    require_label("invoiceNumber", &labels.invoice_number)?;
+    require_label("issueDate", &labels.issue_date)?;
+    require_label("total", &labels.total)?;
+    require_label("bankAccount", &labels.bank_account)?;
+
+    // NOTE: Email summary is intentionally issuer-focused.
+    // We do not include any buyer/client identifiers in the email body.
 
     let invoice_number = invoice.invoice_number.trim();
     let issue_date = invoice.issue_date.trim();
@@ -141,18 +356,16 @@ fn render_invoice_email(
     let total = format_money(invoice.total);
     let currency = invoice.currency.trim();
 
-    let company_mb = settings.registration_number.trim();
-    let client_mb = client.map(|c| c.registration_number.trim()).unwrap_or("");
-
+    let vat_id = settings.pib.trim();
+    if vat_id.is_empty() {
+        return Err("Issuer VAT ID (PIB) is missing in Settings.".to_string());
+    }
     let note = personal_note.map(str::trim).filter(|s| !s.is_empty());
 
     let intro_line = if include_pdf {
-        tr("Faktura je priložena u PDF formatu.", "The invoice is attached as a PDF.")
+        labels.intro_with_pdf.as_str()
     } else {
-        tr(
-            "Faktura je poslata bez PDF priloga.",
-            "The invoice was sent without the PDF attachment.",
-        )
+        labels.intro_without_pdf.as_str()
     };
 
     let bank_account = settings.bank_account.trim();
@@ -168,47 +381,51 @@ fn render_invoice_email(
 
     // ---- Plain-text fallback ----
     let mut text = String::new();
-    text.push_str(tr("Faktura", "Invoice"));
+    text.push_str(&labels.invoice);
     text.push_str("\n\n");
-    text.push_str(&format!("{}: {}\n", tr("Firma", "Company"), company_name));
-    text.push_str(&format!(
-        "{}: {}\n",
-        tr("Matični broj", "Registration number"),
-        if company_mb.is_empty() { "-" } else { company_mb }
-    ));
-    text.push_str(&format!("{}: {}\n", tr("Komitent", "Client"), invoice.client_name.trim()));
-    text.push_str(&format!(
-        "{}: {}\n",
-        tr("Matični broj komitenta", "Client registration number"),
-        if client_mb.is_empty() { "-" } else { client_mb }
-    ));
-    text.push_str(&format!("{}: {}\n", tr("Broj fakture", "Invoice number"), invoice_number));
-    text.push_str(&format!("{}: {}\n", tr("Datum izdavanja", "Issue date"), issue_date));
-    text.push_str(&format!("{}: {} {}\n", tr("Ukupno", "Total"), total, currency));
-    if let Some(d) = due_date {
-        text.push_str(&format!("{}: {}\n", tr("Rok plaćanja", "Due date"), d));
+
+    fn push_kv_text(text: &mut String, label: &str, value: &str) {
+        let v = value.trim();
+        if !v.is_empty() {
+            text.push_str(&format!("{}: {}\n", label, v));
+        }
     }
+
+    // A) INVOICE / ISSUER DETAILS (TOP BLOCK) — exact order
+    push_kv_text(&mut text, &labels.vat_id, vat_id);
+    push_kv_text(&mut text, &labels.invoice_number, invoice_number);
+    push_kv_text(&mut text, &labels.issue_date, issue_date);
+    if let Some(d) = due_date {
+        require_label("dueDate", &labels.due_date)?;
+        push_kv_text(&mut text, &labels.due_date, d);
+    }
+
     text.push('\n');
+    text.push_str("--------------------------------\n");
+    text.push_str("\n");
+
+    // B) PAYMENT DETAILS (SECOND BLOCK) — exact order
+    // Total row (currency is appended only if present)
+    if !total.trim().is_empty() {
+        let cur = currency.trim();
+        if cur.is_empty() {
+            push_kv_text(&mut text, &labels.total, &total);
+        } else {
+            push_kv_text(&mut text, &labels.total, &format!("{} {}", total, cur));
+        }
+    }
+    if let Some(b) = bank_account {
+        push_kv_text(&mut text, &labels.bank_account, b);
+    }
+
+    text.push('\n');
+    // Keep the intro line short and below the summary blocks.
     text.push_str(intro_line);
     text.push('\n');
     if let Some(n) = note {
-        text.push_str(&format!("\n{}\n", tr("Lična poruka:", "Personal note:")));
+        text.push_str(&format!("\n{}\n", labels.personal_note_with_colon));
         text.push_str(n);
         text.push('\n');
-    }
-
-    // Footer (plain text)
-    text.push_str(&format!(
-        "\n{}: {}\n",
-        tr("Firma", "Company"),
-        company_name
-    ));
-    if let Some(b) = bank_account {
-        text.push_str(&format!(
-            "{}: {}\n",
-            tr("Tekući račun", "Bank account"),
-            b
-        ));
     }
 
     text.push_str("\n--------------------------------\n");
@@ -216,25 +433,24 @@ fn render_invoice_email(
     text.push('\n');
 
     // ---- HTML ----
-    let html_company = escape_html(company_name);
-    let html_invoice_number = escape_html(invoice_number);
-    let html_issue_date = escape_html(issue_date);
     let html_total = escape_html(&total);
     let html_currency = escape_html(currency);
     let html_due_date = due_date.map(escape_html);
     let html_note = note.map(escape_html);
     let html_bank_account = bank_account.map(escape_html);
+    let html_vat_id = escape_html(vat_id);
 
-    let title = tr("Faktura", "Invoice");
-    let h_company = tr("Firma", "Company");
-    let h_invoice_number = tr("Broj fakture", "Invoice number");
-    let h_issue_date = tr("Datum izdavanja", "Issue date");
-    let h_due_date = tr("Rok plaćanja", "Due date");
-    let h_total = tr("Ukupno", "Total");
-    let h_personal_note = tr("Lična poruka", "Personal note");
-    let h_company_reg_number = tr("Matični broj", "Registration number");
-    let h_client = tr("Komitent", "Client");
-    let h_client_reg_number = tr("Matični broj komitenta", "Client registration number");
+    fn push_detail_row(html: &mut String, label: &str, value: &str) {
+        let v = value.trim();
+        if v.is_empty() {
+            return;
+        }
+        html.push_str(&format!(
+            "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:13px;color:#111827;font-weight:600;\">{}</td></tr>",
+            escape_html(label),
+            escape_html(v)
+        ));
+    }
 
     let mut html = String::new();
     html.push_str("<!doctype html><html><head><meta charset=\"utf-8\"></head>");
@@ -245,85 +461,78 @@ fn render_invoice_email(
 ");
 
     // Header
-    html.push_str("<tr><td style=\"padding:20px 24px;\">" );
+    html.push_str("<tr><td style=\"padding:20px 24px;\">");
     html.push_str(&format!(
         "<div style=\"font-size:18px;font-weight:700;color:#111827;\">{}</div>",
-        escape_html(title)
-    ));
-    html.push_str(&format!(
-        "<div style=\"margin-top:6px;font-size:13px;color:#4b5563;\">{}: <strong style=\"color:#111827;\">{}</strong></div>",
-        escape_html(h_company),
-        html_company
+        escape_html(labels.invoice.as_str())
     ));
     html.push_str("</td></tr>");
 
     // Body
-    html.push_str("<tr><td style=\"padding:0 24px 20px 24px;\">" );
-    html.push_str(&format!(
-        "<p style=\"margin:16px 0 0 0;font-size:14px;line-height:20px;color:#111827;\">{}</p>",
-        escape_html(intro_line)
-    ));
+    html.push_str("<tr><td style=\"padding:0 24px 20px 24px;\">");
 
-    // Details
+    // A) INVOICE / ISSUER DETAILS (TOP BLOCK) — exact order
     html.push_str("<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top:16px;border:1px solid #e6e8ec;border-radius:10px;\">\
 <tr><td style=\"padding:14px;\">\
 <table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\">\
 ");
 
-    html.push_str(&format!(
-        "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:13px;color:#111827;font-weight:600;\">{}</td></tr>",
-        escape_html(h_invoice_number),
-        html_invoice_number
-    ));
-
-    html.push_str(&format!(
-        "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:13px;color:#111827;font-weight:600;\">{}</td></tr>",
-        escape_html(h_company_reg_number),
-        escape_html(if company_mb.is_empty() { "-" } else { company_mb })
-    ));
-
-    html.push_str(&format!(
-        "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:13px;color:#111827;font-weight:600;\">{}</td></tr>",
-        escape_html(h_client),
-        escape_html(invoice.client_name.trim())
-    ));
-
-    let html_client_mb = escape_html(if client_mb.is_empty() { "-" } else { client_mb });
-
-    html.push_str(&format!(
-        "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:13px;color:#111827;font-weight:600;\">{}</td></tr>",
-        escape_html(h_client_reg_number),
-        html_client_mb
-    ));
-
-    html.push_str(&format!(
-        "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:13px;color:#111827;font-weight:600;\">{}</td></tr>",
-        escape_html(h_issue_date),
-        html_issue_date
-    ));
-
-    if let Some(d) = html_due_date {
-        html.push_str(&format!(
-            "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:13px;color:#111827;font-weight:600;\">{}</td></tr>",
-            escape_html(h_due_date),
-            d
-        ));
+    push_detail_row(&mut html, labels.vat_id.as_str(), &html_vat_id);
+    push_detail_row(&mut html, labels.invoice_number.as_str(), invoice_number);
+    push_detail_row(&mut html, labels.issue_date.as_str(), issue_date);
+    if let Some(d) = html_due_date.as_deref() {
+        push_detail_row(&mut html, labels.due_date.as_str(), d);
     }
-    html.push_str(&format!(
-        "<tr><td style=\"padding:10px 0 0 0;border-top:1px solid #e6e8ec;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:10px 0 0 0;border-top:1px solid #e6e8ec;font-size:15px;color:#111827;font-weight:700;\">{} {}</td></tr>",
-        escape_html(h_total),
-        html_total,
-        html_currency
-    ));
 
     html.push_str("</table></td></tr></table>");
 
+    // Visual divider after top block
+    html.push_str("<div style=\"height:1px;background-color:#e6e8ec;margin:16px 0;\"></div>");
+
+    // B) PAYMENT DETAILS (SECOND BLOCK) — exact order
+    html.push_str("<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"border:1px solid #e6e8ec;border-radius:10px;\">\
+<tr><td style=\"padding:14px;\">\
+<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\">\
+");
+
+    // Total (bold / strong) — first row in payment block
+    if !total.trim().is_empty() {
+        let cur = currency.trim();
+        if cur.is_empty() {
+            html.push_str(&format!(
+                "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:16px;color:#111827;font-weight:800;\">{}</td></tr>",
+                escape_html(labels.total.as_str()),
+                html_total
+            ));
+        } else {
+            html.push_str(&format!(
+                "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:16px;color:#111827;font-weight:800;\">{} {}</td></tr>",
+                escape_html(labels.total.as_str()),
+                html_total,
+                html_currency
+            ));
+        }
+    }
+
+    // Bank account — second row in payment block (only if present)
+    if let Some(b) = html_bank_account.as_deref() {
+        push_detail_row(&mut html, labels.bank_account.as_str(), b);
+    }
+
+    html.push_str("</table></td></tr></table>");
+
+    // Keep the intro line short and below the summary blocks.
+    html.push_str(&format!(
+        "<p style=\"margin:16px 0 0 0;font-size:14px;line-height:20px;color:#111827;\">{}</p>",
+        escape_html(intro_line)
+    ));
+
     // Personal note
     if let Some(n) = html_note {
-        html.push_str("<div style=\"margin-top:16px;\">" );
+        html.push_str("<div style=\"margin-top:16px;\">");
         html.push_str(&format!(
             "<div style=\"font-size:12px;color:#4b5563;font-weight:700;letter-spacing:0.02em;text-transform:uppercase;\">{}</div>",
-            escape_html(h_personal_note)
+            escape_html(labels.personal_note.as_str())
         ));
         html.push_str(&format!(
             "<div style=\"margin-top:8px;padding:12px 14px;border:1px solid #e6e8ec;border-radius:10px;background-color:#ffffff;font-size:14px;line-height:20px;color:#111827;white-space:pre-wrap;\">{}</div>",
@@ -335,32 +544,20 @@ fn render_invoice_email(
     html.push_str("</td></tr>");
 
     // Footer
-    html.push_str("<tr><td style=\"padding:16px 24px 22px 24px;\">" );
-    html.push_str(&format!(
-        "<div style=\"font-size:12px;color:#6b7280;\">{}: <strong style=\"color:#111827;\">{}</strong></div>",
-        escape_html(h_company),
-        html_company
-    ));
-    if let Some(b) = html_bank_account {
-        html.push_str(&format!(
-            "<div style=\"margin-top:4px;font-size:12px;color:#6b7280;\">{}: <strong style=\"color:#111827;\">{}</strong></div>",
-            escape_html(tr("Tekući račun", "Bank account")),
-            b
-        ));
-    }
+    html.push_str("<tr><td style=\"padding:16px 24px 22px 24px;\">");
 
     html.push_str("<div style=\"margin-top:12px;padding-top:12px;border-top:1px solid #e6e8ec;font-size:12px;line-height:18px;color:#6b7280;\">");
     html.push_str(&mandatory_note_html);
     html.push_str("</div>");
     html.push_str(&format!(
         "<div style=\"margin-top:8px;font-size:12px;color:#6b7280;\">{}</div>",
-        escape_html(tr("Generisano iz Pausaler aplikacije.", "Generated from Pausaler app."))
+        escape_html(labels.generated_from_app.as_str())
     ));
     html.push_str("</td></tr>");
 
     html.push_str("</table></td></tr></table></body></html>");
 
-    (html, text)
+    Ok((html, text))
 }
 
 fn push_line(
@@ -413,8 +610,10 @@ struct PdfLabels {
 
     vat_id: String,
     registration_number: String,
+    address: String,
     bank_account: String,
     email: String,
+    phone: String,
 
     invoice_number: String,
     issue_date: String,
@@ -468,8 +667,10 @@ struct PdfLabelsLocale {
 
     vat_id: String,
     registration_number: String,
+    address: String,
     bank_account: String,
     email: String,
+    phone: String,
 
     invoice_number: String,
     issue_date: String,
@@ -531,8 +732,10 @@ fn pdf_labels(lang: &str) -> PdfLabels {
                 details_title: String::new(),
                 vat_id: String::new(),
                 registration_number: String::new(),
+                address: String::new(),
                 bank_account: String::new(),
                 email: String::new(),
+                phone: String::new(),
                 invoice_number: String::new(),
                 issue_date: String::new(),
                 service_date: String::new(),
@@ -574,8 +777,10 @@ fn pdf_labels(lang: &str) -> PdfLabels {
                 details_title: String::new(),
                 vat_id: String::new(),
                 registration_number: String::new(),
+                address: String::new(),
                 bank_account: String::new(),
                 email: String::new(),
+                phone: String::new(),
                 invoice_number: String::new(),
                 issue_date: String::new(),
                 service_date: String::new(),
@@ -623,8 +828,10 @@ fn pdf_labels(lang: &str) -> PdfLabels {
         details_title: loc.details_title.clone(),
         vat_id: loc.vat_id.clone(),
         registration_number: loc.registration_number.clone(),
+        address: loc.address.clone(),
         bank_account: loc.bank_account.clone(),
         email: loc.email.clone(),
+        phone: loc.phone.clone(),
         invoice_number: loc.invoice_number.clone(),
         issue_date: loc.issue_date.clone(),
         service_date: loc.service_date.clone(),
@@ -837,6 +1044,104 @@ fn push_kv_wrapped(
     current_y
 }
 
+fn wrap_text_by_width_mm(
+    ttf_face: &ttf_parser::Face<'_>,
+    input: &str,
+    font_size: f32,
+    max_width_mm: f32,
+) -> Vec<String> {
+    let s = input.trim();
+    if s.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    let mut current = String::new();
+
+    for word in s.split_whitespace() {
+        if current.is_empty() {
+            if text_width_mm_ttf(ttf_face, word, font_size) <= max_width_mm {
+                current.push_str(word);
+                continue;
+            }
+
+            // Split a single too-long word into chunks.
+            let mut chunk = String::new();
+            for ch in word.chars() {
+                let candidate = format!("{}{}", chunk, ch);
+                if text_width_mm_ttf(ttf_face, &candidate, font_size) <= max_width_mm {
+                    chunk = candidate;
+                } else {
+                    if !chunk.is_empty() {
+                        out.push(chunk);
+                    }
+                    chunk = ch.to_string();
+                }
+            }
+            if !chunk.is_empty() {
+                out.push(chunk);
+            }
+            continue;
+        }
+
+        let candidate = format!("{} {}", current, word);
+        if text_width_mm_ttf(ttf_face, &candidate, font_size) <= max_width_mm {
+            current = candidate;
+        } else {
+            out.push(std::mem::take(&mut current));
+
+            if text_width_mm_ttf(ttf_face, word, font_size) <= max_width_mm {
+                current.push_str(word);
+            } else {
+                let mut chunk = String::new();
+                for ch in word.chars() {
+                    let cand = format!("{}{}", chunk, ch);
+                    if text_width_mm_ttf(ttf_face, &cand, font_size) <= max_width_mm {
+                        chunk = cand;
+                    } else {
+                        if !chunk.is_empty() {
+                            out.push(chunk);
+                        }
+                        chunk = ch.to_string();
+                    }
+                }
+                current = chunk;
+            }
+        }
+    }
+
+    if !current.is_empty() {
+        out.push(current);
+    }
+
+    out
+}
+
+fn draw_value_only_wrapped(
+    layer: &printpdf::PdfLayerReference,
+    font: &printpdf::IndirectFontRef,
+    ttf_face: &ttf_parser::Face<'_>,
+    value: &str,
+    font_size: f32,
+    x_value: f32,
+    y: f32,
+    max_width_value: f32,
+    line_height: f32,
+    row_gap: f32,
+) -> f32 {
+    let value_lines = wrap_text_by_width_mm(ttf_face, value, font_size, max_width_value);
+    if value_lines.is_empty() {
+        return y;
+    }
+
+    for (idx, line) in value_lines.iter().enumerate() {
+        let yy = y - (idx as f32) * line_height;
+        push_line(layer, font, line, font_size, x_value, yy);
+    }
+
+    y - (value_lines.len() as f32) * line_height - row_gap
+}
+
 fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Result<Vec<u8>, String> {
     use printpdf::{Image, ImageTransform, Mm, PdfDocument};
     use base64::Engine as _;
@@ -917,6 +1222,7 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
     const LABEL_COL_W: f32 = 36.0;
     #[allow(unused)]
     const HEADER_LABEL_COL_W: f32 = 38.0;
+    const HEADER_ROW_GAP: f32 = 0.8;
 
     // Cell padding (avoid scattered magic numbers)
     const CELL_PAD_X: f32 = 1.2;
@@ -968,7 +1274,7 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
     // without changing the internal alignment of the issuer/buyer columns.
     const TITLE_BLOCK_H: f32 = 14.0;
     const TITLE_TOP_PAD: f32 = 1.5;
-    let doc_title = "FAKTURA";
+    let doc_title = labels.invoice_title.as_str();
     let doc_title_size: f32 = 14.0;
     let doc_title_w = text_width_mm_ttf(&ttf_face, doc_title, doc_title_size);
     let doc_title_x = content_left_x + (content_width - doc_title_w) / 2.0;
@@ -991,7 +1297,7 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
     const LOGO_DPI: f32 = 300.0;
 
     let left_col_right_x = content_left_x + (content_width / 2.0);
-    let left_col_w_orig = left_col_right_x - content_left_x;
+    let _left_col_w_orig = left_col_right_x - content_left_x;
 
     // Decode a data URL logo (as stored from the UI: data:image/*;base64,...) into an image.
     let decoded_logo = logo_url
@@ -1024,7 +1330,7 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
 
     // If we have a logo:
     // - align its TOP to the same Y as the "Od:" label (issuer_top_y)
-    // - align its BOTTOM to the same Y as the last issuer line ("Tekući račun")
+    // - align its BOTTOM to the same Y as the last issuer line (bank account / email / phone)
     // - scale UP/DOWN to fill that exact height (no vertical centering, no size caps)
     // Then shift the issuer block to the right: logo_right_x + LOGO_GAP_X.
     if let Some(img) = decoded_logo {
@@ -1036,11 +1342,6 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
         let issuer_top_y = y;
         let y_after_titles = y - 5.0;
 
-        let addr_chars_for_issuer_left_x = |issuer_left_x: f32| {
-            let left_col_w_now = (left_col_right_x - issuer_left_x).max(10.0);
-            ((42.0 * (left_col_w_now / left_col_w_orig)).floor() as usize).clamp(20, 42)
-        };
-
         // Fixed-point iteration: wrapping -> issuer height -> logo scale -> logo width -> wrapping.
         let mut logo_w_mm = natural_w_mm;
         let mut scale = 1.0_f32;
@@ -1048,11 +1349,64 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
 
         for _ in 0..3 {
             let next_issuer_left_x = content_left_x + logo_w_mm + LOGO_GAP_X;
-            let addr_chars = addr_chars_for_issuer_left_x(next_issuer_left_x);
-            let addr_lines = split_and_wrap_lines(&payload.company.address, addr_chars);
+            let full_w_mm = (left_col_right_x - next_issuer_left_x).max(10.0);
 
-            // Last issuer line baseline (Tekući račun) based on existing layout steps.
-            issuer_last_line_y = y_after_titles - 4.6 - (addr_lines.len() as f32) * line_h - 2.0 * line_h;
+            let company_address_line = payload
+                .company
+                .address_line
+                .as_deref()
+                .unwrap_or("")
+                .trim();
+            let company_postal_code = payload
+                .company
+                .postal_code
+                .as_deref()
+                .unwrap_or("")
+                .trim();
+            let company_city = payload.company.city.as_deref().unwrap_or("").trim();
+            let company_postal_and_city = [company_postal_code, company_city]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let company_address_value = if !company_address_line.is_empty() && !company_postal_and_city.is_empty() {
+                format!("{}, {}", company_address_line, company_postal_and_city)
+            } else if !company_address_line.is_empty() {
+                company_address_line.to_string()
+            } else {
+                payload.company.address.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(", ")
+            };
+
+            let addr_val = company_address_value.trim();
+            // Simulate Y cursor exactly like the rendering below (rows list; empty rows omitted).
+            let mut y_sim = y_after_titles - 4.6;
+            let mut last_baseline: Option<f32> = None;
+
+            let mut consume_value = |val: &str, max_w: f32| {
+                let v = val.trim();
+                if v.is_empty() {
+                    return;
+                }
+                let lines = wrap_text_by_width_mm(&ttf_face, v, text_size, max_w).len().max(1);
+                last_baseline = Some(y_sim - ((lines.saturating_sub(1)) as f32) * line_h);
+                y_sim -= (lines as f32) * line_h + HEADER_ROW_GAP;
+            };
+
+            // Inline labeled rows wrap ONLY the value, indented by width("{label}: ").
+            let vat_prefix_w = text_width_mm_ttf(&ttf_face, &format!("{}: ", labels.vat_id), text_size);
+            let reg_prefix_w = text_width_mm_ttf(&ttf_face, &format!("{}: ", labels.registration_number), text_size);
+            let email_prefix_w = text_width_mm_ttf(&ttf_face, &format!("{}: ", labels.email), text_size);
+            let phone_prefix_w = text_width_mm_ttf(&ttf_face, &format!("{}: ", labels.phone), text_size);
+            let bank_prefix_w = text_width_mm_ttf(&ttf_face, &format!("{}: ", labels.bank_account), text_size);
+
+            consume_value(payload.company.pib.as_str(), (full_w_mm - vat_prefix_w).max(6.0));
+            consume_value(payload.company.registration_number.as_str(), (full_w_mm - reg_prefix_w).max(6.0));
+            consume_value(addr_val, full_w_mm);
+            consume_value(payload.company.email.as_deref().unwrap_or(""), (full_w_mm - email_prefix_w).max(6.0));
+            consume_value(payload.company.phone.as_deref().unwrap_or(""), (full_w_mm - phone_prefix_w).max(6.0));
+            consume_value(payload.company.bank_account.as_str(), (full_w_mm - bank_prefix_w).max(6.0));
+
+            issuer_last_line_y = last_baseline.unwrap_or(y_after_titles);
             let issuer_block_h = issuer_top_y - issuer_last_line_y;
 
             scale = issuer_block_h / natural_h_mm;
@@ -1087,77 +1441,228 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
     push_line(&layer, &font_bold, &payload.company.company_name, name_size, issuer_left_x, y_left);
     y_left -= 4.6;
 
-    let issuer_addr_max_chars = {
-        let left_col_w_now = (left_col_right_x - issuer_left_x).max(10.0);
-        ((42.0 * (left_col_w_now / left_col_w_orig)).floor() as usize).clamp(20, 42)
+    let issuer_x_label = issuer_left_x;
+    let issuer_full_w_mm = (left_col_right_x - issuer_left_x).max(10.0);
+
+    let company_address_line = payload.company.address_line.as_deref().unwrap_or("").trim();
+    let company_postal_code = payload.company.postal_code.as_deref().unwrap_or("").trim();
+    let company_city = payload.company.city.as_deref().unwrap_or("").trim();
+    let company_postal_and_city = [company_postal_code, company_city]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let company_address_value = if !company_address_line.is_empty() && !company_postal_and_city.is_empty() {
+        format!("{}, {}", company_address_line, company_postal_and_city)
+    } else if !company_address_line.is_empty() {
+        company_address_line.to_string()
+    } else {
+        payload
+            .company
+            .address
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join(", ")
     };
-    for line in split_and_wrap_lines(&payload.company.address, issuer_addr_max_chars) {
-        push_line(&layer, &font, &line, text_size, issuer_left_x, y_left);
-        y_left -= line_h;
+
+    #[derive(Clone)]
+    struct HeaderRow {
+        label: Option<String>,
+        value: String,
     }
-    // PIB
-    push_line(
-        &layer,
-        &font,
-        &format!("{}: {}", &labels.vat_id, &payload.company.pib),
-        text_size,
-        issuer_left_x,
-        y_left,
-    );
-    y_left -= line_h;
-    // Registration number
-    push_line(
-        &layer,
-        &font,
-        &format!("{}: {}", &labels.registration_number, &payload.company.registration_number),
-        text_size,
-        issuer_left_x,
-        y_left,
-    );
-    y_left -= line_h;
-    // Bank account
-    push_line(
-        &layer,
-        &font,
-        &format!("{}: {}", &labels.bank_account, &payload.company.bank_account),
-        text_size,
-        issuer_left_x,
-        y_left,
-    );
-    y_left -= line_h;
-    // Optional issuer email isn't present in payload → omit (reference-driven)
+
+    let mut issuer_rows: Vec<HeaderRow> = Vec::new();
+    let vat_value = payload.company.pib.trim();
+    if !vat_value.is_empty() {
+        issuer_rows.push(HeaderRow {
+            label: Some(labels.vat_id.clone()),
+            value: vat_value.to_string(),
+        });
+    }
+    let reg_value = payload.company.registration_number.trim();
+    if !reg_value.is_empty() {
+        issuer_rows.push(HeaderRow {
+            label: Some(labels.registration_number.clone()),
+            value: reg_value.to_string(),
+        });
+    }
+    let addr_value = company_address_value.trim();
+    if !addr_value.is_empty() {
+        issuer_rows.push(HeaderRow {
+            label: None, // address is unlabeled in PDF
+            value: addr_value.to_string(),
+        });
+    }
+    let email_value = payload.company.email.as_deref().unwrap_or("").trim();
+    if !email_value.is_empty() {
+        issuer_rows.push(HeaderRow {
+            label: Some(labels.email.clone()),
+            value: email_value.to_string(),
+        });
+    }
+    let phone_value = payload.company.phone.as_deref().unwrap_or("").trim();
+    if !phone_value.is_empty() {
+        issuer_rows.push(HeaderRow {
+            label: Some(labels.phone.clone()),
+            value: phone_value.to_string(),
+        });
+    }
+    let bank_value = payload.company.bank_account.trim();
+    if !bank_value.is_empty() {
+        issuer_rows.push(HeaderRow {
+            label: Some(labels.bank_account.clone()),
+            value: bank_value.to_string(),
+        });
+    }
+
+    // Render issuer rows: labeled rows inline ("{label}: {value}"); address is unlabeled starting at labelX.
+    for row in issuer_rows {
+        if let Some(label) = row.label {
+            y_left = draw_inline_labeled_row(
+                &layer,
+                &font,
+                &ttf_face,
+                &label,
+                &row.value,
+                text_size,
+                issuer_x_label,
+                y_left,
+                issuer_full_w_mm,
+                line_h,
+                HEADER_ROW_GAP,
+            );
+        } else {
+            y_left = draw_value_only_wrapped(
+                &layer,
+                &font,
+                &ttf_face,
+                &row.value,
+                text_size,
+                issuer_x_label,
+                y_left,
+                issuer_full_w_mm,
+                line_h,
+                HEADER_ROW_GAP,
+            );
+        }
+    }
 
     // Right column: buyer
     let mut y_right = y;
     push_line(&layer, &font_bold, &payload.client.name, name_size, right_x, y_right);
     y_right -= 4.6;
 
-    if let Some(addr) = &payload.client.address {
-        for line in split_and_wrap_lines(addr, 42) {
-            push_line(&layer, &font, &line, text_size, right_x, y_right);
-            y_right -= line_h;
+    let buyer_x_label = right_x;
+    let buyer_full_w_mm = (content_right_x - right_x).max(10.0);
+
+    let buyer_address_line = payload
+        .client
+        .address_line
+        .as_deref()
+        .or_else(|| payload.client.address.as_deref())
+        .unwrap_or("")
+        .trim();
+    let buyer_postal_code = payload.client.postal_code.as_deref().unwrap_or("").trim();
+    let buyer_city = payload.client.city.as_deref().unwrap_or("").trim();
+    let buyer_postal_and_city = [buyer_postal_code, buyer_city]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let buyer_address_value = if !buyer_postal_code.is_empty() && !buyer_city.is_empty() {
+        // Full combined address
+        if buyer_address_line.is_empty() {
+            buyer_postal_and_city
+        } else {
+            format!("{}, {}", buyer_address_line, buyer_postal_and_city)
+        }
+    } else {
+        // Fallback: street-only (as requested), or legacy multiline collapsed if street is empty.
+        if !buyer_address_line.is_empty() {
+            buyer_address_line.to_string()
+        } else {
+            payload
+                .client
+                .address
+                .as_deref()
+                .unwrap_or("")
+                .lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    };
+
+    let mut buyer_rows: Vec<HeaderRow> = Vec::new();
+    let buyer_pib = payload.client.pib.as_deref().unwrap_or("").trim();
+    if !buyer_pib.is_empty() {
+        buyer_rows.push(HeaderRow {
+            label: Some(labels.vat_id.clone()),
+            value: buyer_pib.to_string(),
+        });
+    }
+    if !client_mb.is_empty() {
+        buyer_rows.push(HeaderRow {
+            label: Some(labels.registration_number.clone()),
+            value: client_mb.to_string(),
+        });
+    }
+    let buyer_addr_value = buyer_address_value.trim();
+    if !buyer_addr_value.is_empty() {
+        buyer_rows.push(HeaderRow {
+            label: None, // address is unlabeled in PDF
+            value: buyer_addr_value.to_string(),
+        });
+    }
+    let buyer_email = payload.client.email.as_deref().unwrap_or("").trim();
+    if !buyer_email.is_empty() {
+        buyer_rows.push(HeaderRow {
+            label: Some(labels.email.clone()),
+            value: buyer_email.to_string(),
+        });
+    }
+    let buyer_phone = payload.client.phone.as_deref().unwrap_or("").trim();
+    if !buyer_phone.is_empty() {
+        buyer_rows.push(HeaderRow {
+            label: Some(labels.phone.clone()),
+            value: buyer_phone.to_string(),
+        });
+    }
+    // Tekući račun for buyer: omit when empty (currently always empty in payload).
+
+    for row in buyer_rows {
+        if let Some(label) = row.label {
+            y_right = draw_inline_labeled_row(
+                &layer,
+                &font,
+                &ttf_face,
+                &label,
+                &row.value,
+                text_size,
+                buyer_x_label,
+                y_right,
+                buyer_full_w_mm,
+                line_h,
+                HEADER_ROW_GAP,
+            );
+        } else {
+            y_right = draw_value_only_wrapped(
+                &layer,
+                &font,
+                &ttf_face,
+                &row.value,
+                text_size,
+                buyer_x_label,
+                y_right,
+                buyer_full_w_mm,
+                line_h,
+                HEADER_ROW_GAP,
+            );
         }
     }
-    if let Some(pib) = &payload.client.pib {
-        push_line(
-            &layer,
-            &font,
-            &format!("{}: {}", &labels.vat_id, pib),
-            text_size,
-            right_x,
-            y_right,
-        );
-        y_right -= line_h;
-    }
-    push_line(
-        &layer,
-        &font,
-        &format!("{}: {}", &labels.registration_number, client_mb),
-        text_size,
-        right_x,
-        y_right,
-    );
-    y_right -= line_h;
 
     // After parties block, align y under the lower column
     y = y_left.min(y_right) - 3.2;
@@ -1527,7 +2032,16 @@ pub struct Settings {
     #[serde(default, alias = "maticniBroj")]
     pub registration_number: String,
     pub pib: String,
-    pub address: String,
+    #[serde(default, alias = "address")]
+    pub company_address_line: String,
+    #[serde(default)]
+    pub company_city: String,
+    #[serde(default)]
+    pub company_postal_code: String,
+    #[serde(default)]
+    pub company_email: String,
+    #[serde(default)]
+    pub company_phone: String,
     pub bank_account: String,
     pub logo_url: String,
     pub invoice_prefix: String,
@@ -1562,7 +2076,11 @@ pub struct SettingsPatch {
     #[serde(default, alias = "maticniBroj")]
     pub registration_number: Option<String>,
     pub pib: Option<String>,
-    pub address: Option<String>,
+    pub company_address_line: Option<String>,
+    pub company_city: Option<String>,
+    pub company_postal_code: Option<String>,
+    pub company_email: Option<String>,
+    pub company_phone: Option<String>,
     pub bank_account: Option<String>,
     pub logo_url: Option<String>,
     pub invoice_prefix: Option<String>,
@@ -1587,6 +2105,10 @@ pub struct Client {
     pub registration_number: String,
     pub pib: String,
     pub address: String,
+    #[serde(default)]
+    pub city: String,
+    #[serde(default)]
+    pub postal_code: String,
     pub email: String,
     pub created_at: String,
 }
@@ -1599,6 +2121,10 @@ pub struct NewClient {
     pub registration_number: String,
     pub pib: String,
     pub address: String,
+    #[serde(default)]
+    pub city: String,
+    #[serde(default)]
+    pub postal_code: String,
     pub email: String,
 }
 
@@ -1771,7 +2297,11 @@ fn default_settings() -> Settings {
         company_name: "".to_string(),
         registration_number: "".to_string(),
         pib: "".to_string(),
-        address: "".to_string(),
+        company_address_line: "".to_string(),
+        company_city: "".to_string(),
+        company_postal_code: "".to_string(),
+        company_email: "".to_string(),
+        company_phone: "".to_string(),
         bank_account: "".to_string(),
         logo_url: "".to_string(),
         invoice_prefix: "INV".to_string(),
@@ -1863,6 +2393,11 @@ fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
             maticniBroj TEXT NOT NULL DEFAULT '',
             pib TEXT NOT NULL,
             address TEXT NOT NULL,
+            companyAddressLine TEXT NOT NULL DEFAULT '',
+            companyCity TEXT NOT NULL DEFAULT '',
+            companyPostalCode TEXT NOT NULL DEFAULT '',
+            companyEmail TEXT NOT NULL DEFAULT '',
+            companyPhone TEXT NOT NULL DEFAULT '',
             bankAccount TEXT NOT NULL,
             logoUrl TEXT NOT NULL,
             invoicePrefix TEXT NOT NULL,
@@ -1937,7 +2472,7 @@ fn apply_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     // v=0 typically means a fresh DB (init_schema created the latest tables).
     if v == 0 {
-        conn.execute_batch("PRAGMA user_version = 7;")?;
+        conn.execute_batch("PRAGMA user_version = 8;")?;
         return Ok(());
     }
 
@@ -1997,6 +2532,22 @@ fn apply_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
              ALTER TABLE clients ADD COLUMN maticniBroj TEXT;\n\
              PRAGMA user_version = 7;\n",
         )?;
+        v = 7;
+    }
+
+    if v < 8 {
+        conn.execute_batch(
+            "ALTER TABLE settings ADD COLUMN companyAddressLine TEXT NOT NULL DEFAULT '';\n\
+             ALTER TABLE settings ADD COLUMN companyCity TEXT NOT NULL DEFAULT '';\n\
+             ALTER TABLE settings ADD COLUMN companyPostalCode TEXT NOT NULL DEFAULT '';\n\
+             ALTER TABLE settings ADD COLUMN companyEmail TEXT NOT NULL DEFAULT '';\n\
+             ALTER TABLE settings ADD COLUMN companyPhone TEXT NOT NULL DEFAULT '';\n\
+             UPDATE settings SET companyAddressLine = CASE\n\
+                 WHEN TRIM(COALESCE(companyAddressLine,'')) = '' THEN COALESCE(address,'')\n\
+                 ELSE companyAddressLine\n\
+             END;\n\
+             PRAGMA user_version = 8;\n",
+        )?;
     }
 
     Ok(())
@@ -2019,15 +2570,19 @@ fn ensure_settings_row(conn: &Connection) -> Result<(), rusqlite::Error> {
     let data_json = serde_json::to_string(&s).unwrap_or_else(|_| "{}".to_string());
     conn.execute(
         r#"INSERT INTO settings (
-            id, isConfigured, companyName, maticniBroj, pib, address, bankAccount, logoUrl,
+            id, isConfigured, companyName, maticniBroj, pib, address,
+            companyAddressLine, companyCity, companyPostalCode, companyEmail, companyPhone,
+            bankAccount, logoUrl,
             invoicePrefix, nextInvoiceNumber, defaultCurrency, language,
             smtpHost, smtpPort, smtpUser, smtpPassword, smtpFrom, smtpUseTls, smtpTlsMode,
             data_json, updatedAt
         ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
-            ?9, ?10, ?11, ?12,
-            ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-            ?20, ?21
+            ?1, ?2, ?3, ?4, ?5, ?6,
+            ?7, ?8, ?9, ?10, ?11,
+            ?12, ?13,
+            ?14, ?15, ?16, ?17,
+            ?18, ?19, ?20, ?21, ?22, ?23, ?24,
+            ?25, ?26
         )"#,
         params![
             SETTINGS_ID,
@@ -2035,7 +2590,12 @@ fn ensure_settings_row(conn: &Connection) -> Result<(), rusqlite::Error> {
             s.company_name,
             s.registration_number,
             s.pib,
-            s.address,
+            s.company_address_line.clone(),
+            s.company_address_line,
+            s.company_city,
+            s.company_postal_code,
+            s.company_email,
+            s.company_phone,
             s.bank_account,
             s.logo_url,
             s.invoice_prefix,
@@ -2123,7 +2683,7 @@ impl DbState {
 fn read_settings_from_conn(conn: &Connection) -> Result<Settings, rusqlite::Error> {
     let row = conn
         .query_row(
-            "SELECT data_json, isConfigured, companyName, COALESCE(maticniBroj,''), pib, address, bankAccount, logoUrl, invoicePrefix, nextInvoiceNumber, defaultCurrency, language, smtpHost, smtpPort, smtpUser, smtpPassword, smtpFrom, smtpUseTls, smtpTlsMode FROM settings WHERE id = ?1",
+            "SELECT data_json, isConfigured, companyName, COALESCE(maticniBroj,''), pib, address, companyAddressLine, companyCity, companyPostalCode, companyEmail, companyPhone, bankAccount, logoUrl, invoicePrefix, nextInvoiceNumber, defaultCurrency, language, smtpHost, smtpPort, smtpUser, smtpPassword, smtpFrom, smtpUseTls, smtpTlsMode FROM settings WHERE id = ?1",
             params![SETTINGS_ID],
             |r| {
                 Ok((
@@ -2136,27 +2696,84 @@ fn read_settings_from_conn(conn: &Connection) -> Result<Settings, rusqlite::Erro
                     r.get::<_, String>(6)?,
                     r.get::<_, String>(7)?,
                     r.get::<_, String>(8)?,
-                    r.get::<_, i64>(9)?,
+                    r.get::<_, String>(9)?,
                     r.get::<_, String>(10)?,
                     r.get::<_, String>(11)?,
                     r.get::<_, String>(12)?,
-                    r.get::<_, i64>(13)?,
-                    r.get::<_, String>(14)?,
+                    r.get::<_, String>(13)?,
+                    r.get::<_, i64>(14)?,
                     r.get::<_, String>(15)?,
                     r.get::<_, String>(16)?,
-                    r.get::<_, i64>(17)?,
-                    r.get::<_, String>(18)?,
+                    r.get::<_, String>(17)?,
+                    r.get::<_, i64>(18)?,
+                    r.get::<_, String>(19)?,
+                    r.get::<_, String>(20)?,
+                    r.get::<_, String>(21)?,
+                    r.get::<_, i64>(22)?,
+                    r.get::<_, String>(23)?,
                 ))
             },
         )
         .optional()?;
 
-    if let Some((data_json, is_cfg, company, maticni_broj, pib, addr, bank, logo, prefix, next, currency, lang, smtp_host, smtp_port, smtp_user, smtp_password, smtp_from, smtp_use_tls, smtp_tls_mode)) = row {
+    if let Some((
+        data_json,
+        is_cfg,
+        company,
+        maticni_broj,
+        pib,
+        legacy_addr,
+        company_address_line,
+        company_city,
+        company_postal_code,
+        company_email,
+        company_phone,
+        bank,
+        logo,
+        prefix,
+        next,
+        currency,
+        lang,
+        smtp_host,
+        smtp_port,
+        smtp_user,
+        smtp_password,
+        smtp_from,
+        smtp_use_tls,
+        smtp_tls_mode,
+    )) = row {
         if let Ok(mut parsed) = serde_json::from_str::<Settings>(&data_json) {
             if let Some(v) = is_cfg {
                 parsed.is_configured = Some(v != 0);
             }
             parsed.registration_number = maticni_broj;
+
+            // Keep these fields authoritative from the dedicated columns.
+            // NOTE: `create_invoice` increments `nextInvoiceNumber` in the settings row, but does not
+            // update `data_json`, so relying on JSON here would return stale values.
+            parsed.invoice_prefix = prefix.clone();
+            parsed.next_invoice_number = next;
+            parsed.default_currency = currency.clone();
+            parsed.language = lang.clone();
+
+            if !company_address_line.trim().is_empty() {
+                parsed.company_address_line = company_address_line;
+            } else if parsed.company_address_line.trim().is_empty() && !legacy_addr.trim().is_empty() {
+                parsed.company_address_line = legacy_addr;
+            }
+            if !company_city.trim().is_empty() {
+                parsed.company_city = company_city;
+            }
+            if !company_postal_code.trim().is_empty() {
+                parsed.company_postal_code = company_postal_code;
+            }
+            if !company_email.trim().is_empty() {
+                parsed.company_email = company_email;
+            }
+            if !company_phone.trim().is_empty() {
+                parsed.company_phone = company_phone;
+            }
+
             parsed.smtp_host = smtp_host;
             parsed.smtp_port = smtp_port;
             parsed.smtp_user = smtp_user;
@@ -2173,12 +2790,21 @@ fn read_settings_from_conn(conn: &Connection) -> Result<Settings, rusqlite::Erro
         }
 
         let mode = parse_smtp_tls_mode_str(&smtp_tls_mode).unwrap_or_else(|| default_smtp_tls_mode_for_port(smtp_port));
+        let effective_address_line = if !company_address_line.trim().is_empty() {
+            company_address_line
+        } else {
+            legacy_addr
+        };
         return Ok(Settings {
             is_configured: is_cfg.map(|v| v != 0),
             company_name: company,
             registration_number: maticni_broj,
             pib,
-            address: addr,
+            company_address_line: effective_address_line,
+            company_city,
+            company_postal_code,
+            company_email,
+            company_phone,
             bank_account: bank,
             logo_url: logo,
             invoice_prefix: prefix,
@@ -2221,8 +2847,20 @@ async fn update_settings(state: tauri::State<'_, DbState>, patch: SettingsPatch)
             if let Some(v) = patch.pib {
                 current.pib = v;
             }
-            if let Some(v) = patch.address {
-                current.address = v;
+            if let Some(v) = patch.company_address_line {
+                current.company_address_line = v;
+            }
+            if let Some(v) = patch.company_city {
+                current.company_city = v;
+            }
+            if let Some(v) = patch.company_postal_code {
+                current.company_postal_code = v;
+            }
+            if let Some(v) = patch.company_email {
+                current.company_email = v;
+            }
+            if let Some(v) = patch.company_phone {
+                current.company_phone = v;
             }
             if let Some(v) = patch.bank_account {
                 current.bank_account = v;
@@ -2293,21 +2931,26 @@ async fn update_settings(state: tauri::State<'_, DbState>, patch: SettingsPatch)
                     maticniBroj = ?4,
                     pib = ?5,
                     address = ?6,
-                    bankAccount = ?7,
-                    logoUrl = ?8,
-                    invoicePrefix = ?9,
-                    nextInvoiceNumber = ?10,
-                    defaultCurrency = ?11,
-                    language = ?12,
-                    smtpHost = ?13,
-                    smtpPort = ?14,
-                    smtpUser = ?15,
-                    smtpPassword = ?16,
-                    smtpFrom = ?17,
-                    smtpUseTls = ?18,
-                    smtpTlsMode = ?19,
-                    data_json = ?20,
-                    updatedAt = ?21
+                    companyAddressLine = ?7,
+                    companyCity = ?8,
+                    companyPostalCode = ?9,
+                    companyEmail = ?10,
+                    companyPhone = ?11,
+                    bankAccount = ?12,
+                    logoUrl = ?13,
+                    invoicePrefix = ?14,
+                    nextInvoiceNumber = ?15,
+                    defaultCurrency = ?16,
+                    language = ?17,
+                    smtpHost = ?18,
+                    smtpPort = ?19,
+                    smtpUser = ?20,
+                    smtpPassword = ?21,
+                    smtpFrom = ?22,
+                    smtpUseTls = ?23,
+                    smtpTlsMode = ?24,
+                    data_json = ?25,
+                    updatedAt = ?26
                    WHERE id = ?1"#,
                 params![
                     SETTINGS_ID,
@@ -2315,7 +2958,12 @@ async fn update_settings(state: tauri::State<'_, DbState>, patch: SettingsPatch)
                     current.company_name,
                     current.registration_number,
                     current.pib,
-                    current.address,
+                    current.company_address_line.clone(),
+                    current.company_address_line,
+                    current.company_city,
+                    current.company_postal_code,
+                    current.company_email,
+                    current.company_phone,
                     current.bank_account,
                     current.logo_url,
                     current.invoice_prefix,
@@ -2345,6 +2993,21 @@ async fn generate_invoice_number(state: tauri::State<'_, DbState>) -> Result<Str
         .with_read("generate_invoice_number", |conn| {
             let s = read_settings_from_conn(conn)?;
             Ok(format_invoice_number(&s.invoice_prefix, s.next_invoice_number))
+        })
+        .await
+}
+
+#[tauri::command]
+async fn preview_next_invoice_number(state: tauri::State<'_, DbState>) -> Result<String, String> {
+    // Must match the real atomic assignment logic used in `create_invoice`.
+    state
+        .with_read("preview_next_invoice_number", |conn| {
+            let (prefix, next_num): (String, i64) = conn.query_row(
+                "SELECT invoicePrefix, nextInvoiceNumber FROM settings WHERE id = ?1",
+                params![SETTINGS_ID],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            Ok(format_invoice_number(&prefix, next_num))
         })
         .await
 }
@@ -2399,6 +3062,8 @@ async fn create_client(state: tauri::State<'_, DbState>, input: NewClient) -> Re
                 registration_number: input.registration_number,
                 pib: input.pib,
                 address: input.address,
+                city: input.city,
+                postal_code: input.postal_code,
                 email: input.email,
                 created_at: now_iso(),
             };
@@ -2458,6 +3123,16 @@ async fn update_client(
             }
             if let Some(v) = patch.get("address").and_then(|v| v.as_str()) {
                 existing.address = v.to_string();
+            }
+            if let Some(v) = patch.get("city").and_then(|v| v.as_str()) {
+                existing.city = v.to_string();
+            }
+            if let Some(v) = patch
+                .get("postalCode")
+                .and_then(|v| v.as_str())
+                .or_else(|| patch.get("postal_code").and_then(|v| v.as_str()))
+            {
+                existing.postal_code = v.to_string();
             }
             if let Some(v) = patch.get("email").and_then(|v| v.as_str()) {
                 existing.email = v.to_string();
@@ -2997,7 +3672,8 @@ async fn send_invoice_email(
         .parse()
         .map_err(|_| "Invalid recipient email address.".to_string())?;
 
-    let (html_body, text_body) = render_invoice_email(&settings, &invoice, client.as_ref(), include_pdf, body.as_deref());
+    let (html_body, text_body) =
+        render_invoice_email(&settings, &invoice, client.as_ref(), include_pdf, body.as_deref())?;
     let alternative = MultiPart::alternative()
         .singlepart(SinglePart::plain(text_body))
         .singlepart(SinglePart::html(html_body));
@@ -3007,8 +3683,9 @@ async fn send_invoice_email(
         let pdf_bytes = generate_pdf_bytes(&payload, Some(settings.logo_url.as_str()))?;
         let filename = sanitize_filename(&format!("{}.pdf", invoice.invoice_number));
 
-        let attachment = Attachment::new(filename)
-            .body(pdf_bytes, ContentType::parse("application/pdf").unwrap());
+        let content_type = ContentType::parse("application/pdf")
+            .map_err(|e| format!("Failed to build PDF attachment content type: {e}"))?;
+        let attachment = Attachment::new(filename).body(pdf_bytes, content_type);
 
         Message::builder()
             .from(from_mailbox)
@@ -3305,6 +3982,9 @@ pub fn run() {
             let handle = app.handle();
             let db = DbState::new(&handle)?;
             app.manage(db);
+
+            // Best-effort sanity check: never panic/crash if embedded labels are invalid.
+            sanity_check_embedded_invoice_email_labels();
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
@@ -3312,12 +3992,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             quit_app,
+            list_serbia_cities,
             export_invoice_pdf_to_downloads,
             export_invoices_csv,
             export_expenses_csv,
             get_settings,
             update_settings,
             generate_invoice_number,
+            preview_next_invoice_number,
             get_all_clients,
             get_client_by_id,
             create_client,
@@ -3491,8 +4173,28 @@ fn build_invoice_pdf_payload_from_db(invoice: &Invoice, client: Option<&Client>,
             company_name: settings.company_name.clone(),
             registration_number: settings.registration_number.clone(),
             pib: settings.pib.clone(),
-            address: settings.address.clone(),
+            address: {
+                let line1 = settings.company_address_line.trim();
+                let postal = settings.company_postal_code.trim();
+                let city = settings.company_city.trim();
+                let mut line2 = String::new();
+                if !postal.is_empty() {
+                    line2.push_str(postal);
+                }
+                if !city.is_empty() {
+                    if !line2.is_empty() {
+                        line2.push(' ');
+                    }
+                    line2.push_str(city);
+                }
+                [line1.to_string(), line2].into_iter().filter(|s| !s.trim().is_empty()).collect::<Vec<_>>().join("\n")
+            },
+            address_line: Some(settings.company_address_line.clone()).filter(|s| !s.trim().is_empty()),
+            postal_code: Some(settings.company_postal_code.clone()).filter(|s| !s.trim().is_empty()),
+            city: Some(settings.company_city.clone()).filter(|s| !s.trim().is_empty()),
             bank_account: settings.bank_account.clone(),
+            email: Some(settings.company_email.clone()).filter(|s| !s.trim().is_empty()),
+            phone: Some(settings.company_phone.clone()).filter(|s| !s.trim().is_empty()),
         },
         client: InvoicePdfClient {
             name: invoice.client_name.clone(),
@@ -3501,7 +4203,11 @@ fn build_invoice_pdf_payload_from_db(invoice: &Invoice, client: Option<&Client>,
                 .filter(|s| !s.trim().is_empty()),
             pib: client.map(|c| c.pib.clone()).filter(|s| !s.trim().is_empty()),
             address: client.map(|c| c.address.clone()).filter(|s| !s.trim().is_empty()),
+            address_line: client.map(|c| c.address.clone()).filter(|s| !s.trim().is_empty()),
+            postal_code: client.map(|c| c.postal_code.clone()).filter(|s| !s.trim().is_empty()),
+            city: client.map(|c| c.city.clone()).filter(|s| !s.trim().is_empty()),
             email: client.map(|c| c.email.clone()).filter(|s| !s.trim().is_empty()),
+            phone: None,
         },
         items,
     }
@@ -3556,4 +4262,44 @@ fn mandatory_invoice_note_html(lang: &str, invoice_number: &str) -> String {
         .map(|l| escape_html(&l))
         .collect::<Vec<_>>()
         .join("<br/>")
+}
+
+fn draw_inline_labeled_row(
+    layer: &printpdf::PdfLayerReference,
+    font: &printpdf::IndirectFontRef,
+    ttf_face: &ttf_parser::Face<'_>,
+    label: &str,
+    value: &str,
+    font_size: f32,
+    x: f32,
+    y: f32,
+    max_width_total: f32,
+    line_height: f32,
+    row_gap: f32,
+) -> f32 {
+    let v = value.trim();
+    if v.is_empty() {
+        return y;
+    }
+
+    // Exactly ONE space after the colon.
+    let prefix = format!("{}: ", label);
+    let prefix_w = text_width_mm_ttf(ttf_face, &prefix, font_size);
+    let value_x = x + prefix_w;
+    let value_w = (max_width_total - prefix_w).max(6.0);
+
+    let value_lines = wrap_text_by_width_mm(ttf_face, v, font_size, value_w);
+    if value_lines.is_empty() {
+        return y;
+    }
+
+    push_line(layer, font, &prefix, font_size, x, y);
+    push_line(layer, font, &value_lines[0], font_size, value_x, y);
+
+    for (idx, line) in value_lines.iter().enumerate().skip(1) {
+        let yy = y - (idx as f32) * line_height;
+        push_line(layer, font, line, font_size, value_x, yy);
+    }
+
+    y - (value_lines.len() as f32) * line_height - row_gap
 }
