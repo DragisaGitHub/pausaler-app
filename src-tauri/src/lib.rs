@@ -940,6 +940,29 @@ fn text_width_mm_ttf(face: &ttf_parser::Face<'_>, text: &str, font_size_pt: f32)
     width_pt * PT_TO_MM
 }
 
+fn font_ascent_mm(face: &ttf_parser::Face<'_>, font_size_pt: f32) -> f32 {
+    const PT_TO_MM: f32 = 25.4 / 72.0;
+    let units_per_em = face.units_per_em() as f32;
+    if units_per_em <= 0.0 {
+        return font_size_pt * PT_TO_MM * 0.80;
+    }
+
+    let asc_units = face.ascender() as f32;
+    (asc_units / units_per_em) * font_size_pt * PT_TO_MM
+}
+
+fn font_descent_mm(face: &ttf_parser::Face<'_>, font_size_pt: f32) -> f32 {
+    const PT_TO_MM: f32 = 25.4 / 72.0;
+    let units_per_em = face.units_per_em() as f32;
+    if units_per_em <= 0.0 {
+        return font_size_pt * PT_TO_MM * 0.20;
+    }
+
+    // descender is typically negative; convert to a positive magnitude in mm.
+    let desc_units = face.descender() as f32;
+    ((-desc_units).max(0.0) / units_per_em) * font_size_pt * PT_TO_MM
+}
+
 fn push_line_right_measured(
     layer: &printpdf::PdfLayerReference,
     font: &printpdf::IndirectFontRef,
@@ -1294,16 +1317,21 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
     draw_rule_with_thickness(&layer, content_left_x, content_right_x, y, 0.85);
     y -= 8.5;
 
-    // A) Parties block (two columns)
-    // Optional company logo:
-    // - when present, render in top-left header area
-    // - shift issuer block X to the right of the logo
-    // - keep Y flow unchanged so downstream layout (rules/table/totals) stays identical
-    const LOGO_GAP_X: f32 = 4.0;
+    // A) Parties header (two rows)
+    // Row 1: issuer/company (left) + logo (right reserved area)
+    // Row 2: buyer/client (full width)
+    // IMPORTANT: Remove the "Od:" and "Komitent:" labels (do not render section titles).
     const LOGO_DPI: f32 = 300.0;
+    // Reserved area on the right for the logo (Row 1 only). Applied ONLY when a logo exists.
+    // Slightly wider to let the logo feel less cramped.
+    const LOGO_AREA_W: f32 = 52.0;
+    // Gap between issuer text area and logo box.
+    const LOGO_GAP: f32 = 6.0;
+    const HEADER_ROWS_GAP_Y: f32 = 8.0;
 
-    let left_col_right_x = content_left_x + (content_width / 2.0);
-    let _left_col_w_orig = left_col_right_x - content_left_x;
+    let name_size = 11.0;
+    let text_size = 8.3;
+    let line_h = 4.0;
 
     // Decode a data URL logo (as stored from the UI: data:image/*;base64,...) into an image.
     let decoded_logo = logo_url
@@ -1325,130 +1353,14 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
             Some(img)
         });
 
-    // Compute issuer anchor X. Default is the original (no-logo) anchor.
-    let mut issuer_left_x = content_left_x;
-
-    let right_x = content_left_x + (content_width / 2.0) + 4.0;
-    let title_size = 10.0;
-    let name_size = 11.0;
-    let text_size = 8.3;
-    let line_h = 4.0;
-
-    // If we have a logo:
-    // - align its TOP to the same Y as the "Od:" label (issuer_top_y)
-    // - align its BOTTOM to the same Y as the last issuer line (bank account / email / phone)
-    // - scale UP/DOWN to fill that exact height (no vertical centering, no size caps)
-    // Then shift the issuer block to the right: logo_right_x + LOGO_GAP_X.
-    if let Some(img) = decoded_logo {
-        let px_w = img.width().max(1) as f32;
-        let px_h = img.height().max(1) as f32;
-
-        let natural_w_mm = px_w / LOGO_DPI * 25.4;
-        let natural_h_mm = px_h / LOGO_DPI * 25.4;
-        let issuer_top_y = y;
-        let y_after_titles = y - 5.0;
-
-        // Fixed-point iteration: wrapping -> issuer height -> logo scale -> logo width -> wrapping.
-        let mut logo_w_mm = natural_w_mm;
-        let mut scale = 1.0_f32;
-        let mut issuer_last_line_y = y_after_titles;
-
-        for _ in 0..3 {
-            let next_issuer_left_x = content_left_x + logo_w_mm + LOGO_GAP_X;
-            let full_w_mm = (left_col_right_x - next_issuer_left_x).max(10.0);
-
-            let company_address_line = payload
-                .company
-                .address_line
-                .as_deref()
-                .unwrap_or("")
-                .trim();
-            let company_postal_code = payload
-                .company
-                .postal_code
-                .as_deref()
-                .unwrap_or("")
-                .trim();
-            let company_city = payload.company.city.as_deref().unwrap_or("").trim();
-            let company_postal_and_city = [company_postal_code, company_city]
-                .into_iter()
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join(" ");
-            let company_address_value = if !company_address_line.is_empty() && !company_postal_and_city.is_empty() {
-                format!("{}, {}", company_address_line, company_postal_and_city)
-            } else if !company_address_line.is_empty() {
-                company_address_line.to_string()
-            } else {
-                payload.company.address.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(", ")
-            };
-
-            let addr_val = company_address_value.trim();
-            // Simulate Y cursor exactly like the rendering below (rows list; empty rows omitted).
-            let mut y_sim = y_after_titles - 4.6;
-            let mut last_baseline: Option<f32> = None;
-
-            let mut consume_value = |val: &str, max_w: f32| {
-                let v = val.trim();
-                if v.is_empty() {
-                    return;
-                }
-                let lines = wrap_text_by_width_mm(&ttf_face, v, text_size, max_w).len().max(1);
-                last_baseline = Some(y_sim - ((lines.saturating_sub(1)) as f32) * line_h);
-                y_sim -= (lines as f32) * line_h + HEADER_ROW_GAP;
-            };
-
-            // Inline labeled rows wrap ONLY the value, indented by width("{label}: ").
-            let vat_prefix_w = text_width_mm_ttf(&ttf_face, &format!("{}: ", labels.vat_id), text_size);
-            let reg_prefix_w = text_width_mm_ttf(&ttf_face, &format!("{}: ", labels.registration_number), text_size);
-            let email_prefix_w = text_width_mm_ttf(&ttf_face, &format!("{}: ", labels.email), text_size);
-            let phone_prefix_w = text_width_mm_ttf(&ttf_face, &format!("{}: ", labels.phone), text_size);
-            let bank_prefix_w = text_width_mm_ttf(&ttf_face, &format!("{}: ", labels.bank_account), text_size);
-
-            consume_value(payload.company.pib.as_str(), (full_w_mm - vat_prefix_w).max(6.0));
-            consume_value(payload.company.registration_number.as_str(), (full_w_mm - reg_prefix_w).max(6.0));
-            consume_value(addr_val, full_w_mm);
-            consume_value(payload.company.email.as_deref().unwrap_or(""), (full_w_mm - email_prefix_w).max(6.0));
-            consume_value(payload.company.phone.as_deref().unwrap_or(""), (full_w_mm - phone_prefix_w).max(6.0));
-            consume_value(payload.company.bank_account.as_str(), (full_w_mm - bank_prefix_w).max(6.0));
-
-            issuer_last_line_y = last_baseline.unwrap_or(y_after_titles);
-            let issuer_block_h = issuer_top_y - issuer_last_line_y;
-
-            scale = issuer_block_h / natural_h_mm;
-            logo_w_mm = natural_w_mm * scale;
-        }
-
-        issuer_left_x = content_left_x + logo_w_mm + LOGO_GAP_X;
-
-        // Draw logo so its top aligns to issuer_top_y and its bottom aligns to the last issuer line.
-        let logo_bottom_y = issuer_last_line_y;
-        let image = Image::from_dynamic_image(&img);
-        image.add_to_layer(
-            layer.clone(),
-            ImageTransform {
-                translate_x: Some(Mm(content_left_x)),
-                translate_y: Some(Mm(logo_bottom_y)),
-                rotate: None,
-                scale_x: Some(scale),
-                scale_y: Some(scale),
-                dpi: Some(LOGO_DPI),
-            },
-        );
-    }
-
-    // Visual hierarchy: strong section titles; names bold; details regular.
-    push_line(&layer, &font_bold, &labels.issuer_title, title_size, issuer_left_x, y);
-    push_line(&layer, &font_bold, &labels.buyer_title, title_size, right_x, y);
-    y -= 5.0;
-
-    // Left column: issuer
-    let mut y_left = y;
-    push_line(&layer, &font_bold, &payload.company.company_name, name_size, issuer_left_x, y_left);
-    y_left -= 4.6;
-
-    let issuer_x_label = issuer_left_x;
-    let issuer_full_w_mm = (left_col_right_x - issuer_left_x).max(10.0);
+    let has_logo = decoded_logo.is_some();
+    let row1_top_y = y;
+    let row1_text_right_x = if has_logo {
+        (content_right_x - LOGO_AREA_W).max(content_left_x + 20.0)
+    } else {
+        content_right_x
+    };
+    let row1_text_w_mm = (row1_text_right_x - content_left_x).max(10.0);
 
     let company_address_line = payload.company.address_line.as_deref().unwrap_or("").trim();
     let company_postal_code = payload.company.postal_code.as_deref().unwrap_or("").trim();
@@ -1478,6 +1390,25 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
         label: Option<String>,
         value: String,
     }
+
+    // --- Row 1: issuer/company (wrapped to avoid the reserved logo area) ---
+    let mut y_issuer = row1_top_y;
+    push_line(
+        &layer,
+        &font_bold,
+        &payload.company.company_name,
+        name_size,
+        content_left_x,
+        y_issuer,
+    );
+    y_issuer -= 4.6;
+
+    // Use font metrics to align the logo to the company-name line (top edge), not lower issuer rows.
+    // `push_line` uses a baseline Y; ascent gets us to the visual top of the glyphs.
+    let issuer_top_y = row1_top_y + font_ascent_mm(&ttf_face, name_size);
+
+    let issuer_x_label = content_left_x;
+    let issuer_full_w_mm = row1_text_w_mm;
 
     let mut issuer_rows: Vec<HeaderRow> = Vec::new();
     let vat_value = payload.company.pib.trim();
@@ -1523,10 +1454,12 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
         });
     }
 
+    let issuer_row_count = issuer_rows.len();
+
     // Render issuer rows: labeled rows inline ("{label}: {value}"); address is unlabeled starting at labelX.
     for row in issuer_rows {
         if let Some(label) = row.label {
-            y_left = draw_inline_labeled_row(
+            y_issuer = draw_inline_labeled_row(
                 &layer,
                 &font,
                 &ttf_face,
@@ -1534,20 +1467,20 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
                 &row.value,
                 text_size,
                 issuer_x_label,
-                y_left,
+                y_issuer,
                 issuer_full_w_mm,
                 line_h,
                 HEADER_ROW_GAP,
             );
         } else {
-            y_left = draw_value_only_wrapped(
+            y_issuer = draw_value_only_wrapped(
                 &layer,
                 &font,
                 &ttf_face,
                 &row.value,
                 text_size,
                 issuer_x_label,
-                y_left,
+                y_issuer,
                 issuer_full_w_mm,
                 line_h,
                 HEADER_ROW_GAP,
@@ -1555,13 +1488,80 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
         }
     }
 
-    // Right column: buyer
-    let mut y_right = y;
-    push_line(&layer, &font_bold, &payload.client.name, name_size, right_x, y_right);
-    y_right -= 4.6;
+    let issuer_block_h = (row1_top_y - y_issuer).max(0.0);
 
-    let buyer_x_label = right_x;
-    let buyer_full_w_mm = (content_right_x - right_x).max(10.0);
+    // Baseline of the last issuer line (e.g. "Tekući račun") is one line-height above the returned y,
+    // because the draw_* helpers return y advanced by (lines * line_height + row_gap).
+    let issuer_last_baseline_y = if issuer_row_count > 0 {
+        y_issuer + line_h + HEADER_ROW_GAP
+    } else {
+        // If no rows exist, treat the company name as the only issuer line.
+        row1_top_y
+    };
+    // Bottom of the issuer block as the visual bottom of the last line.
+    let issuer_bottom_y = issuer_last_baseline_y - font_descent_mm(&ttf_face, text_size);
+
+    // --- Row 1: logo (top-right within reserved area) ---
+    let mut logo_h_mm: f32 = 0.0;
+    if let Some(img) = decoded_logo {
+        let px_w = img.width().max(1) as f32;
+        let px_h = img.height().max(1) as f32;
+
+        let natural_w_mm = px_w / LOGO_DPI * 25.4;
+        let natural_h_mm = px_h / LOGO_DPI * 25.4;
+
+        let logo_box_left = (row1_text_right_x + LOGO_GAP).min(content_right_x);
+        let logo_box_right = content_right_x;
+        let logo_box_w = (logo_box_right - logo_box_left).max(1.0);
+
+        // Scale to visually match the issuer block height, but still contain within the logo box width.
+        // This keeps the logo prominent and vertically aligned with issuer content.
+        let target_h = issuer_block_h.max(0.0);
+        let scale_w = logo_box_w / natural_w_mm.max(1.0);
+        let scale_h = target_h / natural_h_mm.max(1.0);
+        let scale = scale_w.min(scale_h).max(0.01);
+
+        let scaled_w_mm = natural_w_mm * scale;
+        let scaled_h_mm = natural_h_mm * scale;
+        logo_h_mm = scaled_h_mm;
+
+        // Right-align within the reserved box; top-align with the company name line.
+        let logo_x = (logo_box_right - scaled_w_mm).max(logo_box_left);
+        // Place the logo so its top edge aligns with the company name, and clamp so the bottom
+        // doesn't extend below the issuer block.
+        let logo_bottom_y = (issuer_top_y - scaled_h_mm).max(issuer_bottom_y);
+
+        let image = Image::from_dynamic_image(&img);
+        image.add_to_layer(
+            layer.clone(),
+            ImageTransform {
+                translate_x: Some(Mm(logo_x)),
+                translate_y: Some(Mm(logo_bottom_y)),
+                rotate: None,
+                scale_x: Some(scale),
+                scale_y: Some(scale),
+                dpi: Some(LOGO_DPI),
+            },
+        );
+    }
+
+    // --- Row 2: buyer/client (full width, below the tallest Row 1 element) ---
+    let row1_h = issuer_block_h.max(logo_h_mm);
+    let row2_top_y = row1_top_y - row1_h - HEADER_ROWS_GAP_Y;
+
+    let mut y_buyer = row2_top_y;
+    push_line(
+        &layer,
+        &font_bold,
+        &payload.client.name,
+        name_size,
+        content_left_x,
+        y_buyer,
+    );
+    y_buyer -= 4.6;
+
+    let buyer_x_label = content_left_x;
+    let buyer_full_w_mm = (content_right_x - content_left_x).max(10.0);
 
     let buyer_address_line = payload
         .client
@@ -1641,7 +1641,7 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
 
     for row in buyer_rows {
         if let Some(label) = row.label {
-            y_right = draw_inline_labeled_row(
+            y_buyer = draw_inline_labeled_row(
                 &layer,
                 &font,
                 &ttf_face,
@@ -1649,20 +1649,20 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
                 &row.value,
                 text_size,
                 buyer_x_label,
-                y_right,
+                y_buyer,
                 buyer_full_w_mm,
                 line_h,
                 HEADER_ROW_GAP,
             );
         } else {
-            y_right = draw_value_only_wrapped(
+            y_buyer = draw_value_only_wrapped(
                 &layer,
                 &font,
                 &ttf_face,
                 &row.value,
                 text_size,
                 buyer_x_label,
-                y_right,
+                y_buyer,
                 buyer_full_w_mm,
                 line_h,
                 HEADER_ROW_GAP,
@@ -1670,8 +1670,8 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
         }
     }
 
-    // After parties block, align y under the lower column
-    y = y_left.min(y_right) - 3.2;
+    // After parties block, keep the existing divider below the WHOLE header.
+    y = y_buyer - 3.2;
     // This rule is the TOP separator framing the items-table header band.
     // We draw it after painting the header background so the rule stays crisp on top.
     let items_header_top_rule_y = y;
