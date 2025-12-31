@@ -18,7 +18,7 @@ import {
   Tooltip,
 } from 'antd';
 import { ArrowLeftOutlined, EditOutlined, FilePdfOutlined, MailOutlined } from '@ant-design/icons';
-import { Client, Invoice, InvoiceItem, Settings, INVOICE_STATUS_VALUES } from '../types';
+import { Client, Invoice, InvoiceItem, Settings, INVOICE_STATUS_VALUES, invoiceUnitLabel, normalizeInvoiceUnit } from '../types';
 import { getStorage } from '../services/storageProvider';
 import dayjs from 'dayjs';
 import { getInvoiceOverdueDays, isInvoiceOverdue } from '../services/invoiceOverdue';
@@ -255,6 +255,13 @@ export function InvoiceViewPage() {
       align: 'right' as const,
     },
     {
+      title: t('newInvoice.unit'),
+      dataIndex: 'unit',
+      key: 'unit',
+      width: 100,
+      render: (v: string | undefined) => invoiceUnitLabel(normalizeInvoiceUnit(v)),
+    },
+    {
       title: t('newInvoice.unitPrice'),
       dataIndex: 'unitPrice',
       key: 'unitPrice',
@@ -458,7 +465,7 @@ export function InvoiceViewPage() {
           summary={() => (
             <Table.Summary>
               <Table.Summary.Row>
-                <Table.Summary.Cell index={0} colSpan={4} align="right">
+                <Table.Summary.Cell index={0} colSpan={5} align="right">
                   <strong>{t('invoiceView.total')}:</strong>
                 </Table.Summary.Cell>
                 <Table.Summary.Cell index={1} align="right">

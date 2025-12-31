@@ -603,6 +603,7 @@ fn wrap_text_lines(input: &str, max_chars: usize) -> Vec<String> {
 struct PdfLabels {
     doc_title: String,
     invoice_title: String,
+    invoice_title_service_invoice_no: String,
 
     issuer_title: String,
     buyer_title: String,
@@ -660,6 +661,7 @@ struct PdfLabels {
 struct PdfLabelsLocale {
     doc_title: String,
     invoice_title: String,
+    invoice_title_service_invoice_no: String,
 
     issuer_title: String,
     buyer_title: String,
@@ -727,6 +729,7 @@ fn pdf_labels(lang: &str) -> PdfLabels {
             sr: PdfLabelsLocale {
                 doc_title: String::new(),
                 invoice_title: String::new(),
+                invoice_title_service_invoice_no: String::new(),
                 issuer_title: String::new(),
                 buyer_title: String::new(),
                 details_title: String::new(),
@@ -772,6 +775,7 @@ fn pdf_labels(lang: &str) -> PdfLabels {
             en: PdfLabelsLocale {
                 doc_title: String::new(),
                 invoice_title: String::new(),
+                invoice_title_service_invoice_no: String::new(),
                 issuer_title: String::new(),
                 buyer_title: String::new(),
                 details_title: String::new(),
@@ -823,6 +827,7 @@ fn pdf_labels(lang: &str) -> PdfLabels {
     PdfLabels {
         doc_title: loc.doc_title.clone(),
         invoice_title: loc.invoice_title.clone(),
+        invoice_title_service_invoice_no: loc.invoice_title_service_invoice_no.clone(),
         issuer_title: loc.issuer_title.clone(),
         buyer_title: loc.buyer_title.clone(),
         details_title: loc.details_title.clone(),
@@ -1274,12 +1279,13 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
     // without changing the internal alignment of the issuer/buyer columns.
     const TITLE_BLOCK_H: f32 = 14.0;
     const TITLE_TOP_PAD: f32 = 1.5;
-    let doc_title = labels.invoice_title.as_str();
+    let title_prefix = labels.invoice_title_service_invoice_no.as_str();
+    let title_text = format!("{}{}", title_prefix, payload.invoice_number.trim());
     let doc_title_size: f32 = 14.0;
-    let doc_title_w = text_width_mm_ttf(&ttf_face, doc_title, doc_title_size);
+    let doc_title_w = text_width_mm_ttf(&ttf_face, title_text.as_str(), doc_title_size);
     let doc_title_x = content_left_x + (content_width - doc_title_w) / 2.0;
     let doc_title_y = y - TITLE_TOP_PAD;
-    push_line(&layer, &font_bold, doc_title, doc_title_size, doc_title_x, doc_title_y);
+    push_line(&layer, &font_bold, title_text.as_str(), doc_title_size, doc_title_x, doc_title_y);
 
     // Shift the header block down; the top rule becomes the separator UNDER the title.
     y -= TITLE_BLOCK_H;
@@ -1666,7 +1672,9 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
 
     // After parties block, align y under the lower column
     y = y_left.min(y_right) - 3.2;
-    draw_rule_with_thickness(&layer, content_left_x, content_right_x, y, 0.45);
+    // This rule is the TOP separator framing the items-table header band.
+    // We draw it after painting the header background so the rule stays crisp on top.
+    let items_header_top_rule_y = y;
     y -= 6.8;
 
     // B) Items table
@@ -1736,6 +1744,15 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
     let disc_right_x = col_disc_right - cell_pad_x;
     let numeric_right_x = col_total_right - cell_pad_x;
 
+    // Header background: fill the entire band BETWEEN the two framing rules.
+    // Top rule Y is recorded right after the parties block; bottom rule Y is the line drawn after the header labels.
+    const HEADER_ROW_ADVANCE: f32 = 6.0; // must match the y-step immediately after drawing header labels
+    let header_band_top_y = items_header_top_rule_y;
+    let header_band_bottom_y = y - HEADER_ROW_ADVANCE;
+    let header_band_h = (header_band_top_y - header_band_bottom_y).max(0.0);
+    let header_band_w = (table_right - table_left).max(0.0);
+    fill_rect_gray(&layer, table_left, header_band_top_y, header_band_w, header_band_h, 0.92);
+
     push_line(&layer, &font_bold, &labels.col_description, header_size, service_header_x, y);
     push_line(&layer, &font_bold, &labels.col_unit, header_size, unit_header_x, y);
     push_line_right_measured(&layer, &font_bold, &ttf_face, &labels.col_qty, header_size, qty_right_x, y);
@@ -1750,7 +1767,11 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
     );
     push_line_right_measured(&layer, &font_bold, &ttf_face, &labels.col_discount, header_size, disc_right_x, y);
     push_line_right_measured(&layer, &font_bold, &ttf_face, &labels.col_amount, header_size, numeric_right_x, y);
-    y -= 6.0;
+
+    // Draw the top separator rule on top of the gray band.
+    draw_rule_with_thickness(&layer, content_left_x, content_right_x, items_header_top_rule_y, 0.45);
+
+    y -= HEADER_ROW_ADVANCE;
     draw_rule_with_thickness(&layer, table_left, table_right, y, 0.60);
     y -= 7.8;
 
@@ -1909,6 +1930,10 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
     draw_rule_with_thickness(&layer, totals_left, totals_box_right, totals_top_y - 3.0 * totals_row_h, 0.85);
 
     y = totals_top_y - 3.0 * totals_row_h - 7.0;
+
+    // Add a bit of air between the rule above and the notes title.
+    let section_gap_after_rule: f32 = 3.0;
+    y -= section_gap_after_rule;
 
     // D) Comment / service description block
     push_line(&layer, &font_bold, &labels.notes, 10.0, content_left_x, y);

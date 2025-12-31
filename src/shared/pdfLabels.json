@@ -2,6 +2,7 @@
   "sr": {
     "docTitle": "Faktura",
     "invoiceTitle": "FAKTURA",
+    "invoiceTitleServiceInvoiceNo": "Račun usluga broj: ",
 
     "issuerTitle": "Od:",
     "buyerTitle": "Komitent:",
@@ -56,6 +57,7 @@
   "en": {
     "docTitle": "Invoice",
     "invoiceTitle": "INVOICE",
+    "invoiceTitleServiceInvoiceNo": "Service invoice No.: ",
 
     "issuerTitle": "From:",
     "buyerTitle": "Customer:",
