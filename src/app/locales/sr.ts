@@ -292,6 +292,57 @@ export const sr = {
     smtpTlsModeMismatch465: 'Port 465 zahteva implicitni TLS (SMTPS).',
     smtpTlsModeMismatch587: 'Port 587 zahteva STARTTLS.',
     smtpUseTls: 'Koristi TLS',
+    emailHelp: {
+      title: 'Kako da podesite slanje email faktura?',
+      intro: 'Ova podešavanja omogućavaju da aplikacija automatski šalje fakture email-om.',
+      notConfiguredWarning: 'Email slanje nije aktivno – fakture se i dalje mogu generisati kao PDF.',
+      viewOnlyNote: 'Email slanje je dostupno samo u licenciranoj verziji.',
+
+      providersTitle: 'Preporučeni provajderi (spremni primeri)',
+      provider: {
+        yahoo: { title: 'Yahoo Mail' },
+        gmail: { title: 'Gmail' },
+        outlook: { title: 'Outlook / Hotmail' },
+      },
+      providerFields: {
+        host: 'SMTP host',
+        port: 'Port',
+        tls: 'TLS',
+        user: 'Korisnik',
+        pass: 'Lozinka',
+      },
+      providerValues: {
+        tlsStarttls: 'STARTTLS',
+        userFullEmail: 'Puna email adresa',
+        passAppPassword: 'App Password (ne vaša standardna lozinka)',
+        gmailRequiresAppPassword: 'Potreban App Password (2FA mora biti uključen)',
+      },
+
+      appPasswordTitle: 'App lozinka (važno)',
+      appPasswordBody:
+        'Vaša standardna email lozinka najčešće NE radi. Većina provajdera zahteva “App password”. Napravite je u podešavanjima vašeg email naloga i nalepite je u “SMTP lozinka”.',
+
+      fieldsTitle: 'Šta znače ova polja?',
+      fields: {
+        smtpHost: 'SMTP host – adresa servera (primer: smtp.gmail.com).',
+        smtpPort: 'SMTP port – najčešće 587.',
+        smtpUser: 'SMTP korisnik – obično puna email adresa.',
+        smtpPassword: 'SMTP lozinka – App password.',
+        smtpFrom: 'From adresa – email adresa koja se prikazuje klijentima.',
+        smtpTlsMode: 'TLS režim – preporučeno STARTTLS.',
+        smtpUseTls: 'Koristi TLS – treba da bude uključeno.',
+      },
+
+      securityTitle: 'Bezbednost',
+      securityBody:
+        'Lozinka se čuva lokalno na vašem računaru. Aplikacija ne šalje kredencijale nigde osim ka vašem SMTP serveru. Nema clouda, nema eksternog servera.',
+
+      testTitle: 'Test',
+      testButton: 'Testiraj email podešavanja',
+      testHelp: 'Šalje test email na email adresu firme.',
+      testSuccess: 'Test email je uspešno poslat.',
+      testError: 'Neuspešno slanje test email-a: {{message}}',
+    },
   },
   overview: {
     title: 'Pregled',

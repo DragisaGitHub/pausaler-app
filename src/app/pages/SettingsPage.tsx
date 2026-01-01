@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
-import { Form, Input, InputNumber, Button, message, Select, Upload, Switch, Tabs } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
+import { Alert, Collapse, Descriptions, Divider, Form, Input, InputNumber, Button, message, Select, Space, Upload, Switch, Tabs, Typography } from 'antd';
 import { SaveOutlined, UploadOutlined } from '@ant-design/icons';
+import { InfoCircleOutlined, MailOutlined } from '@ant-design/icons';
 import { Settings, CURRENCY_VALUES } from '../types';
 import { useSettings } from '../hooks/useSettings';
 import { useTranslation } from 'react-i18next';
@@ -8,16 +9,50 @@ import i18n, { normalizeLanguage } from '../i18n';
 import { useSerbiaCities } from '../hooks/useSerbiaCities';
 import { useLicenseGate } from '../components/LicenseGate';
 import { isFeatureAllowed } from '../services/featureGate';
+import { isSmtpConfigured } from '../services/smtp';
+import { sendTestEmail } from '../services/smtpTest';
 
 export function SettingsPage() {
   const { t } = useTranslation();
   const [form] = Form.useForm<Settings>();
   const { settings, loading, save } = useSettings();
   const [logoUrl, setLogoUrl] = useState('');
+  const [testingEmail, setTestingEmail] = useState(false);
   const serbiaCities = useSerbiaCities();
 
   const { status } = useLicenseGate();
   const canWriteSettings = isFeatureAllowed(status, 'SETTINGS_WRITE');
+
+  const smtpHost = Form.useWatch('smtpHost', form);
+  const smtpPort = Form.useWatch('smtpPort', form);
+  const smtpFrom = Form.useWatch('smtpFrom', form);
+
+  const smtpActive = useMemo(() => {
+    return isSmtpConfigured({
+      smtpHost: String(smtpHost ?? ''),
+      smtpPort: Number(smtpPort ?? 0),
+      smtpFrom: String(smtpFrom ?? ''),
+    });
+  }, [smtpHost, smtpPort, smtpFrom]);
+
+  const handleTestEmail = async () => {
+    if (!canWriteSettings) {
+      message.error(t('settings.emailHelp.viewOnlyNote'));
+      return;
+    }
+    if (testingEmail) return;
+
+    setTestingEmail(true);
+    try {
+      await sendTestEmail();
+      message.success(t('settings.emailHelp.testSuccess'));
+    } catch (e: any) {
+      const msg = (e && typeof e === 'object' && 'message' in e) ? String(e.message) : String(e);
+      message.error(t('settings.emailHelp.testError', { message: msg }));
+    } finally {
+      setTestingEmail(false);
+    }
+  };
 
   useEffect(() => {
     if (!settings) return;
@@ -348,6 +383,117 @@ export function SettingsPage() {
                     <Form.Item label={t('settings.smtpUseTls')} name="smtpUseTls" valuePropName="checked">
                       <Switch />
                     </Form.Item>
+
+                    <Divider style={{ margin: '12px 0' }} />
+
+                    {!smtpActive ? (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        icon={<InfoCircleOutlined />}
+                        message={t('settings.emailHelp.notConfiguredWarning')}
+                        style={{ marginBottom: 12 }}
+                      />
+                    ) : null}
+
+                    <Space wrap style={{ marginBottom: 12 }}>
+                      <Button
+                        icon={<MailOutlined />}
+                        onClick={() => void handleTestEmail()}
+                        loading={testingEmail}
+                        disabled={!canWriteSettings}
+                      >
+                        {t('settings.emailHelp.testButton')}
+                      </Button>
+                      <Typography.Text type="secondary">{t('settings.emailHelp.testHelp')}</Typography.Text>
+                    </Space>
+
+                    <Collapse
+                      items={[
+                        {
+                          key: 'emailHelp',
+                          label: t('settings.emailHelp.title'),
+                          children: (
+                            <div>
+                              <Typography.Paragraph style={{ marginTop: 0 }}>
+                                {t('settings.emailHelp.intro')}
+                              </Typography.Paragraph>
+
+                              {!canWriteSettings ? (
+                                <Alert
+                                  type="info"
+                                  showIcon
+                                  icon={<InfoCircleOutlined />}
+                                  message={t('settings.emailHelp.viewOnlyNote')}
+                                  style={{ marginBottom: 12 }}
+                                />
+                              ) : null}
+
+                              <Typography.Title level={5} style={{ marginTop: 0 }}>
+                                {t('settings.emailHelp.providersTitle')}
+                              </Typography.Title>
+
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
+                                <Descriptions size="small" bordered column={1} title={t('settings.emailHelp.provider.yahoo.title')}>
+                                  <Descriptions.Item label={t('settings.emailHelp.providerFields.host')}>smtp.mail.yahoo.com</Descriptions.Item>
+                                  <Descriptions.Item label={t('settings.emailHelp.providerFields.port')}>587</Descriptions.Item>
+                                  <Descriptions.Item label={t('settings.emailHelp.providerFields.tls')}>{t('settings.emailHelp.providerValues.tlsStarttls')}</Descriptions.Item>
+                                  <Descriptions.Item label={t('settings.emailHelp.providerFields.user')}>{t('settings.emailHelp.providerValues.userFullEmail')}</Descriptions.Item>
+                                  <Descriptions.Item label={t('settings.emailHelp.providerFields.pass')}>{t('settings.emailHelp.providerValues.passAppPassword')}</Descriptions.Item>
+                                </Descriptions>
+
+                                <Descriptions size="small" bordered column={1} title={t('settings.emailHelp.provider.gmail.title')}>
+                                  <Descriptions.Item label={t('settings.emailHelp.providerFields.host')}>smtp.gmail.com</Descriptions.Item>
+                                  <Descriptions.Item label={t('settings.emailHelp.providerFields.port')}>587</Descriptions.Item>
+                                  <Descriptions.Item label={t('settings.emailHelp.providerFields.tls')}>{t('settings.emailHelp.providerValues.tlsStarttls')}</Descriptions.Item>
+                                  <Descriptions.Item label={t('settings.emailHelp.providerFields.user')}>{t('settings.emailHelp.providerValues.userFullEmail')}</Descriptions.Item>
+                                  <Descriptions.Item label={t('settings.emailHelp.providerFields.pass')}>{t('settings.emailHelp.providerValues.gmailRequiresAppPassword')}</Descriptions.Item>
+                                </Descriptions>
+
+                                <Descriptions size="small" bordered column={1} title={t('settings.emailHelp.provider.outlook.title')}>
+                                  <Descriptions.Item label={t('settings.emailHelp.providerFields.host')}>smtp.office365.com</Descriptions.Item>
+                                  <Descriptions.Item label={t('settings.emailHelp.providerFields.port')}>587</Descriptions.Item>
+                                  <Descriptions.Item label={t('settings.emailHelp.providerFields.tls')}>{t('settings.emailHelp.providerValues.tlsStarttls')}</Descriptions.Item>
+                                  <Descriptions.Item label={t('settings.emailHelp.providerFields.user')}>{t('settings.emailHelp.providerValues.userFullEmail')}</Descriptions.Item>
+                                  <Descriptions.Item label={t('settings.emailHelp.providerFields.pass')}>{t('settings.emailHelp.providerValues.passAppPassword')}</Descriptions.Item>
+                                </Descriptions>
+                              </div>
+
+                              <Divider style={{ margin: '12px 0' }} />
+
+                              <Typography.Title level={5} style={{ marginTop: 0 }}>
+                                {t('settings.emailHelp.appPasswordTitle')}
+                              </Typography.Title>
+                              <Typography.Paragraph style={{ marginBottom: 12 }}>
+                                {t('settings.emailHelp.appPasswordBody')}
+                              </Typography.Paragraph>
+
+                              <Typography.Title level={5} style={{ marginTop: 0 }}>
+                                {t('settings.emailHelp.fieldsTitle')}
+                              </Typography.Title>
+                              <ul style={{ marginTop: 8 }}>
+                                <li>{t('settings.emailHelp.fields.smtpHost')}</li>
+                                <li>{t('settings.emailHelp.fields.smtpPort')}</li>
+                                <li>{t('settings.emailHelp.fields.smtpUser')}</li>
+                                <li>{t('settings.emailHelp.fields.smtpPassword')}</li>
+                                <li>{t('settings.emailHelp.fields.smtpFrom')}</li>
+                                <li>{t('settings.emailHelp.fields.smtpTlsMode')}</li>
+                                <li>{t('settings.emailHelp.fields.smtpUseTls')}</li>
+                              </ul>
+
+                              <Divider style={{ margin: '12px 0' }} />
+
+                              <Typography.Title level={5} style={{ marginTop: 0 }}>
+                                {t('settings.emailHelp.securityTitle')}
+                              </Typography.Title>
+                              <Typography.Paragraph style={{ marginBottom: 0 }}>
+                                {t('settings.emailHelp.securityBody')}
+                              </Typography.Paragraph>
+                            </div>
+                          ),
+                        },
+                      ]}
+                    />
                   </div>
                 ),
               },
