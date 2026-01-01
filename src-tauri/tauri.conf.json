@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "pausaler-app",
-  "version": "0.1.0",
-  "identifier": "com.dstankovski.pausaler-app",
+  "productName": "Paushaler",
+  "version": "1.0.0",
+  "identifier": "com.dstankovski.paushaler",
   "build": {
     "beforeDevCommand": "yarn dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "pausaler-app",
+        "title": "Paushaler",
         "width": 800,
         "height": 600,
         "decorations": false,
