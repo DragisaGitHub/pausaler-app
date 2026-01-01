@@ -7,7 +7,13 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "license": "cargo run --manifest-path license-generator/Cargo.toml --",
+    "license:help": "cargo run --manifest-path license-generator/Cargo.toml -- --help",
+    "license:public-key": "cargo run --manifest-path license-generator/Cargo.toml -- public-key",
+    "license-ui:install": "yarn --cwd license-generator-ui install",
+    "license-ui:dev": "yarn --cwd license-generator-ui tauri dev",
+    "license-ui:build": "yarn --cwd license-generator-ui tauri build"
   },
   "dependencies": {
     "@ant-design/colors": "^7.2.1",

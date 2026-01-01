@@ -35,6 +35,8 @@ import {
 import { getStorage } from '../services/storageProvider';
 import { useTranslation } from 'react-i18next';
 import { getNumberLocale, normalizeLanguage } from '../i18n';
+import { useLicenseGate } from '../components/LicenseGate';
+import { isFeatureAllowed } from '../services/featureGate';
 
 const storage = getStorage();
 
@@ -47,6 +49,10 @@ export function NewInvoicePage() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
+  const { status } = useLicenseGate();
+
+  const canWriteInvoices = isFeatureAllowed(status, 'INVOICES_WRITE');
+  const canWriteClients = isFeatureAllowed(status, 'CLIENTS_WRITE');
   const state = location.state as LocationState;
 
   const numberLocale = getNumberLocale(normalizeLanguage(i18n.language));
@@ -193,6 +199,10 @@ export function NewInvoicePage() {
   }, [editId, duplicateId, state, form, navigate]);
 
   const handleAddItem = () => {
+    if (!canWriteInvoices) {
+      message.error(t('license.lockedDescription'));
+      return;
+    }
     const newItem: InvoiceItem = {
       id: Date.now().toString(),
       description: '',
@@ -206,6 +216,10 @@ export function NewInvoicePage() {
   };
 
   const handleRemoveItem = (id: string) => {
+    if (!canWriteInvoices) {
+      message.error(t('license.lockedDescription'));
+      return;
+    }
     setItems((prev) => prev.filter((item) => item.id !== id));
   };
 
@@ -214,6 +228,10 @@ export function NewInvoicePage() {
     field: keyof InvoiceItem,
     value: string | number | null
   ) => {
+    if (!canWriteInvoices) {
+      message.error(t('license.lockedDescription'));
+      return;
+    }
     setItems((prev) =>
       prev.map((item) => {
         if (item.id !== id) return item;
@@ -250,6 +268,10 @@ export function NewInvoicePage() {
   };
 
   const handleAddClient = async (values: Omit<Client, 'id' | 'createdAt'>) => {
+    if (!canWriteClients) {
+      message.error(t('license.lockedDescription'));
+      return;
+    }
     const newClient = await storage.createClient(values);
     setClients((prev) => [...prev, newClient]);
     form.setFieldValue('clientId', newClient.id);
@@ -260,6 +282,11 @@ export function NewInvoicePage() {
 
   const handleSave = async (exportPDF = false) => {
     try {
+      if (!canWriteInvoices) {
+        message.error(t('license.lockedDescription'));
+        return;
+      }
+
       const values = await form.validateFields();
 
       if (items.length === 0) {
@@ -360,6 +387,7 @@ export function NewInvoicePage() {
         <Input
           placeholder={t('newInvoice.descriptionPlaceholder')}
           value={record.description}
+          disabled={!canWriteInvoices}
           onChange={(e) =>
             handleItemChange(record.id, 'description', e.target.value)
           }
@@ -374,6 +402,7 @@ export function NewInvoicePage() {
       render: (_: string, record: InvoiceItem) => (
         <Select<InvoiceUnit>
           value={record.unit}
+          disabled={!canWriteInvoices}
           onChange={(value) => handleItemChange(record.id, 'unit', value)}
           options={INVOICE_UNIT_VALUES.map((u) => ({ value: u, label: invoiceUnitLabel(u) }))}
           style={{ width: '100%' }}
@@ -390,6 +419,7 @@ export function NewInvoicePage() {
           min={0.01}
           step={0.01}
           value={record.quantity}
+          disabled={!canWriteInvoices}
           onChange={(value) =>
             handleItemChange(record.id, 'quantity', value || 0)
           }
@@ -407,6 +437,7 @@ export function NewInvoicePage() {
           min={0}
           step={0.01}
           value={record.unitPrice}
+          disabled={!canWriteInvoices}
           onChange={(value) =>
             handleItemChange(record.id, 'unitPrice', value || 0)
           }
@@ -427,6 +458,7 @@ export function NewInvoicePage() {
           min={0}
           step={0.01}
           value={record.discountAmount}
+          disabled={!canWriteInvoices}
           onChange={(value) =>
             handleItemChange(record.id, 'discountAmount', value)
           }
@@ -457,6 +489,7 @@ export function NewInvoicePage() {
           type="text"
           danger
           icon={<DeleteOutlined />}
+          disabled={!canWriteInvoices}
           onClick={() => handleRemoveItem(record.id)}
         />
       ),
@@ -486,20 +519,21 @@ export function NewInvoicePage() {
           >
             {t('common.cancel')}
           </Button>
-          <Button icon={<SaveOutlined />} onClick={() => void handleSave(false)}>
+          <Button icon={<SaveOutlined />} onClick={() => void handleSave(false)} disabled={!canWriteInvoices}>
             {t('common.save')}
           </Button>
           <Button
             type="primary"
             icon={<FilePdfOutlined />}
             onClick={() => void handleSave(true)}
+            disabled={!canWriteInvoices}
           >
             {t('newInvoice.saveAndExport')}
           </Button>
         </Space>
       </div>
 
-      <Form form={form} layout="vertical" size="large">
+      <Form form={form} layout="vertical" size="large" disabled={!canWriteInvoices}>
         <Card title={t('newInvoice.basicInfo')} style={{ marginBottom: 24 }}>
           <div
             style={{
@@ -525,7 +559,14 @@ export function NewInvoicePage() {
                     <Button
                       type="link"
                       icon={<PlusOutlined />}
-                      onClick={() => setIsClientModalVisible(true)}
+                      disabled={!canWriteClients}
+                      onClick={() => {
+                        if (!canWriteClients) {
+                          message.error(t('license.lockedDescription'));
+                          return;
+                        }
+                        setIsClientModalVisible(true);
+                      }}
                       style={{ width: '100%' }}
                     >
                       {t('newInvoice.addNewClient')}
@@ -580,7 +621,7 @@ export function NewInvoicePage() {
         <Card
           title={t('newInvoice.invoiceItems')}
           extra={
-            <Button type="dashed" icon={<PlusOutlined />} onClick={handleAddItem}>
+            <Button type="dashed" icon={<PlusOutlined />} onClick={handleAddItem} disabled={!canWriteInvoices}>
               {t('newInvoice.addItem')}
             </Button>
           }
@@ -632,7 +673,7 @@ export function NewInvoicePage() {
         }}
         footer={null}
       >
-        <Form form={clientForm} layout="vertical" onFinish={handleAddClient}>
+        <Form form={clientForm} layout="vertical" onFinish={handleAddClient} disabled={!canWriteClients}>
           <Form.Item
             label={t('clients.name')}
             name="name"
@@ -675,7 +716,7 @@ export function NewInvoicePage() {
           <Form.Item>
             <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
               <Button onClick={() => setIsClientModalVisible(false)}>{t('common.cancel')}</Button>
-              <Button type="primary" htmlType="submit">
+              <Button type="primary" htmlType="submit" disabled={!canWriteClients}>
                 {t('clients.add')}
               </Button>
             </Space>

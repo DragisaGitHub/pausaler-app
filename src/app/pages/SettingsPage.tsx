@@ -6,6 +6,8 @@ import { useSettings } from '../hooks/useSettings';
 import { useTranslation } from 'react-i18next';
 import i18n, { normalizeLanguage } from '../i18n';
 import { useSerbiaCities } from '../hooks/useSerbiaCities';
+import { useLicenseGate } from '../components/LicenseGate';
+import { isFeatureAllowed } from '../services/featureGate';
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -13,6 +15,9 @@ export function SettingsPage() {
   const { settings, loading, save } = useSettings();
   const [logoUrl, setLogoUrl] = useState('');
   const serbiaCities = useSerbiaCities();
+
+  const { status } = useLicenseGate();
+  const canWriteSettings = isFeatureAllowed(status, 'SETTINGS_WRITE');
 
   useEffect(() => {
     if (!settings) return;
@@ -32,6 +37,10 @@ export function SettingsPage() {
 
   const handleSubmit = async (values: Settings) => {
     try {
+      if (!canWriteSettings) {
+        message.error(t('license.lockedDescription'));
+        return;
+      }
       await save({ ...values, logoUrl });
       message.success(t('settings.saved'));
       await i18n.changeLanguage(normalizeLanguage(values.language));
@@ -62,6 +71,7 @@ export function SettingsPage() {
           layout="vertical"
           onFinish={handleSubmit}
           size="large"
+          disabled={!canWriteSettings}
           style={{ paddingBottom: 128, display: 'flex', flexDirection: 'column' }}
         >
           <Tabs
@@ -379,6 +389,7 @@ export function SettingsPage() {
             icon={<SaveOutlined />}
             size="large"
             loading={loading}
+            disabled={!canWriteSettings}
             onClick={() => form.submit()}
           >
             {t('settings.save')}

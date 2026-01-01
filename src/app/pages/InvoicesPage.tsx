@@ -34,6 +34,8 @@ import {
 } from '../services/invoicePdf';
 import { useTranslation } from 'react-i18next';
 import { getNumberLocale, normalizeLanguage } from '../i18n';
+import { useLicenseGate } from '../components/LicenseGate';
+import { isFeatureAllowed } from '../services/featureGate';
 
 const storage = getStorage();
 
@@ -44,6 +46,10 @@ type InvoiceStatusFilter = Invoice['status'] | 'OVERDUE';
 export function InvoicesPage() {
     const { t, i18n } = useTranslation();
     const navigate = useNavigate();
+    const { status } = useLicenseGate();
+
+    const canWriteInvoices = isFeatureAllowed(status, 'INVOICES_WRITE');
+    const canExportPdf = isFeatureAllowed(status, 'INVOICES_EXPORT_PDF');
 
     const { invoices, deleteInvoice } = useInvoices();
     const { clients } = useClients();
@@ -58,6 +64,10 @@ export function InvoicesPage() {
     >(null);
 
     const handleDelete = async (id: string) => {
+        if (!canWriteInvoices) {
+            message.error(t('license.lockedDescription'));
+            return;
+        }
         const ok = await deleteInvoice(id);
         if (ok) {
             message.success(t('invoices.deletedSuccess'));
@@ -67,6 +77,10 @@ export function InvoicesPage() {
     };
 
     const handleDuplicate = (invoice: Invoice) => {
+        if (!canWriteInvoices) {
+            message.error(t('license.lockedDescription'));
+            return;
+        }
         const duplicated: Omit<Invoice, 'id' | 'createdAt'> = {
             ...invoice,
             invoiceNumber: '',
@@ -82,6 +96,11 @@ export function InvoicesPage() {
 
     const handleExportPDF = async (invoice: Invoice) => {
         if (exportingId) return;
+
+        if (!canExportPdf) {
+            message.error(t('license.lockedDescription'));
+            return;
+        }
 
         if (!invoice.items?.length) {
             message.error(t('invoiceView.missingItems'));
@@ -237,6 +256,7 @@ export function InvoicesPage() {
                     <Button
                         type="link"
                         icon={<EditOutlined />}
+                        disabled={!canWriteInvoices}
                         onClick={() => navigate('/invoices/new', { state: { editId: record.id } })}
                     >
                         {t('common.edit')}
@@ -244,6 +264,7 @@ export function InvoicesPage() {
 
                     <Button
                         type="link"
+                        disabled={!canExportPdf}
                         icon={<FilePdfOutlined />}
                         loading={exportingId === record.id}
                         onClick={() => handleExportPDF(record)}
@@ -254,6 +275,7 @@ export function InvoicesPage() {
                     <Button
                         type="link"
                         icon={<CopyOutlined />}
+                        disabled={!canWriteInvoices}
                         onClick={() => handleDuplicate(record)}
                     >
                         {t('common.duplicate')}
@@ -261,6 +283,7 @@ export function InvoicesPage() {
 
                     <Popconfirm
                         title={t('common.delete')}
+                        disabled={!canWriteInvoices}
                         description={t('invoices.deleteConfirm')}
                         onConfirm={() => void handleDelete(record.id)}
                         okText={t('common.yes')}
@@ -290,6 +313,7 @@ export function InvoicesPage() {
                     type="primary"
                     icon={<PlusOutlined />}
                     size="large"
+                    disabled={!canWriteInvoices}
                     onClick={() => navigate('/invoices/new')}
                 >
                     {t('invoices.new')}

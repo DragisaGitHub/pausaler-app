@@ -1,10 +1,12 @@
-import { useState } from 'react';
-import { Alert, Button, Card, Form, Input, Upload, message } from 'antd';
+import { useMemo, useState } from 'react';
+import { Alert, Button, Card, Form, Input, Upload, message, Space, Typography } from 'antd';
 import { UploadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { Settings } from '../types';
 import { getStorage } from '../services/storageProvider';
+import { generateActivationCode } from '../services/licenseCodeGenerator';
+import { startTrialIfNeeded } from '../services/trialService';
 
 type SetupCompanyPageProps = {
   onCompleted?: () => void;
@@ -23,6 +25,11 @@ export function SetupCompanyPage({ onCompleted }: SetupCompanyPageProps) {
   const [form] = Form.useForm<SetupCompanyForm>();
   const [saving, setSaving] = useState(false);
   const [logoUrl, setLogoUrl] = useState('');
+  const [activationCode, setActivationCode] = useState('');
+  const [generating, setGenerating] = useState(false);
+
+  const pibValue = Form.useWatch('pib', form);
+  const pibTrimmed = useMemo(() => String(pibValue ?? '').trim(), [pibValue]);
 
   const handleLogoUpload = (file: File) => {
     const reader = new FileReader();
@@ -44,6 +51,8 @@ export function SetupCompanyPage({ onCompleted }: SetupCompanyPageProps) {
         isConfigured: true,
       });
 
+      startTrialIfNeeded(values.pib);
+
       onCompleted?.();
       message.success(t('settings.saved'));
       navigate('/', { replace: true });
@@ -51,6 +60,21 @@ export function SetupCompanyPage({ onCompleted }: SetupCompanyPageProps) {
       message.error(t('settings.saveError'));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleGenerateActivationCode = async () => {
+    if (!pibTrimmed) return;
+    if (generating) return;
+    setGenerating(true);
+    try {
+      const code = await generateActivationCode(pibTrimmed);
+      setActivationCode(code);
+      message.success(t('license.activationCodeGenerated'));
+    } catch {
+      message.error(t('license.activationCodeError'));
+    } finally {
+      setGenerating(false);
     }
   };
 
@@ -174,6 +198,43 @@ export function SetupCompanyPage({ onCompleted }: SetupCompanyPageProps) {
               )}
             </div>
           </Form.Item>
+
+          <Alert
+            style={{ marginBottom: 16 }}
+            type="info"
+            showIcon
+            message={t('license.trialStartsNowTitle')}
+            description={
+              <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                <Typography.Text>{t('license.trialStartsNowDesc')}</Typography.Text>
+                <Space>
+                  <Button onClick={() => void handleGenerateActivationCode()} loading={generating} disabled={!pibTrimmed}>
+                    {t('license.generateActivationCode')}
+                  </Button>
+                  <Button
+                    onClick={async () => {
+                      if (!activationCode) return;
+                      try {
+                        await navigator.clipboard.writeText(activationCode);
+                        message.success(t('license.copied'));
+                      } catch {
+                        message.error(t('license.copyError'));
+                      }
+                    }}
+                    disabled={!activationCode}
+                  >
+                    {t('license.copy')}
+                  </Button>
+                </Space>
+                <Input.TextArea
+                  value={activationCode}
+                  readOnly
+                  autoSize={{ minRows: 2, maxRows: 4 }}
+                  placeholder={t('license.activationCodePlaceholder')}
+                />
+              </Space>
+            }
+          />
 
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <Button type="primary" htmlType="submit" size="large" loading={saving}>

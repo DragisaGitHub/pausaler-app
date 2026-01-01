@@ -12,6 +12,7 @@ import { OverviewPage } from './pages/OverviewPage';
 import { ExpensesPage } from './pages/ExpensesPage';
 import { ExportsPage } from './pages/ExportsPage';
 import { ReportsPage } from './pages/ReportsPage';
+import { LicensePage } from './pages/LicensePage';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import i18n, { normalizeLanguage } from './i18n';
@@ -74,6 +75,7 @@ export default function App() {
             <Route path="invoices/new" element={<NewInvoicePage />} />
             <Route path="invoices/view/:id" element={<InvoiceViewPage />} />
             <Route path="clients" element={<ClientsPage />} />
+            <Route path="license" element={<LicensePage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
         </Routes>

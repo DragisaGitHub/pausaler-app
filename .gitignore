@@ -31,3 +31,18 @@ src-tauri/.tauri/
 *.njsproj
 *.sln
 *.sw?
+
+# --- Monorepo / nested projects ---
+**/node_modules/
+**/dist/
+**/dist-ssr/
+
+# Rust/Tauri targets anywhere (root + nested)
+**/target/
+**/src-tauri/target/
+**/src-tauri/.tauri/
+
+# Rust/Windows build artifacts that can get huge
+**/*.pdb
+**/*.rlib
+**/*.rmeta
