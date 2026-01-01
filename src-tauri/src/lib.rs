@@ -3763,6 +3763,72 @@ async fn send_invoice_email(
 }
 
 #[tauri::command]
+async fn send_test_email(state: tauri::State<'_, DbState>) -> Result<bool, String> {
+    let settings = state
+        .with_read("send_test_email_settings", move |conn| read_settings_from_conn(conn))
+        .await?;
+
+    validate_smtp_settings(&settings)?;
+
+    let to_raw = settings.company_email.trim().to_string();
+    if to_raw.is_empty() {
+        return Err("Company email is missing (Settings → Company → Email).".to_string());
+    }
+
+    let from_mailbox: Mailbox = settings
+        .smtp_from
+        .parse()
+        .map_err(|_| "Invalid From address in SMTP settings.".to_string())?;
+    let to_mailbox: Mailbox = to_raw
+        .parse()
+        .map_err(|_| "Invalid company email address.".to_string())?;
+
+    let is_en = settings.language.to_ascii_lowercase().starts_with("en");
+    let subject = if is_en {
+        "Pausaler: Test email"
+    } else {
+        "Pausaler: Test email poruka"
+    };
+
+    let text_body: String = if is_en {
+        "This is a test email. Your SMTP settings are working.".to_string()
+    } else {
+        "Ovo je test email poruka. Vaša SMTP podešavanja rade.".to_string()
+    };
+    let html_body: String = if is_en {
+        "<p><strong>This is a test email.</strong></p><p>Your SMTP settings are working.</p>".to_string()
+    } else {
+        "<p><strong>Ovo je test email poruka.</strong></p><p>Vaša SMTP podešavanja rade.</p>".to_string()
+    };
+
+    let email = Message::builder()
+        .from(from_mailbox)
+        .to(to_mailbox)
+        .subject(subject)
+        .multipart(
+            MultiPart::alternative()
+                .singlepart(SinglePart::plain(text_body))
+                .singlepart(SinglePart::html(html_body)),
+        )
+        .map_err(|e| format!("Failed to build email: {e}"))?;
+
+    let settings = std::sync::Arc::new(settings);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let transport = build_smtp_transport(&settings)?;
+        transport.send(&email).map_err(|e| {
+            eprintln!("[email] test send failed: {e}");
+            format!("Failed to send email: {e}")
+        })?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    Ok(true)
+}
+
+#[tauri::command]
 async fn export_invoice_pdf_to_downloads(
     state: tauri::State<'_, DbState>,
     app: tauri::AppHandle,
@@ -4066,7 +4132,8 @@ pub fn run() {
             create_expense,
             update_expense,
             delete_expense,
-            send_invoice_email
+            send_invoice_email,
+            send_test_email
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

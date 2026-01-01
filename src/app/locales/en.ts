@@ -287,6 +287,57 @@ export const en = {
     smtpTlsModeMismatch465: 'Port 465 requires Implicit TLS (SMTPS).',
     smtpTlsModeMismatch587: 'Port 587 requires STARTTLS.',
     smtpUseTls: 'Use TLS',
+    emailHelp: {
+      title: 'How to configure email sending?',
+      intro: 'These settings allow the app to send invoices by email automatically.',
+      notConfiguredWarning: 'Email sending is not active — invoices can still be generated as PDF.',
+      viewOnlyNote: 'Email sending is available only in the licensed version.',
+
+      providersTitle: 'Recommended providers (ready-to-use examples)',
+      provider: {
+        yahoo: { title: 'Yahoo Mail' },
+        gmail: { title: 'Gmail' },
+        outlook: { title: 'Outlook / Hotmail' },
+      },
+      providerFields: {
+        host: 'SMTP host',
+        port: 'Port',
+        tls: 'TLS',
+        user: 'Username',
+        pass: 'Password',
+      },
+      providerValues: {
+        tlsStarttls: 'STARTTLS',
+        userFullEmail: 'Full email address',
+        passAppPassword: 'App Password (not your normal password)',
+        gmailRequiresAppPassword: 'Requires App Password (2FA must be enabled)',
+      },
+
+      appPasswordTitle: 'App password (important)',
+      appPasswordBody:
+        'Your normal email password usually does NOT work. Most providers require an “App password”. Create it in your email provider account and paste it into “SMTP password”.',
+
+      fieldsTitle: 'What do these fields mean?',
+      fields: {
+        smtpHost: 'SMTP host — the server address (example: smtp.gmail.com).',
+        smtpPort: 'SMTP port — usually 587.',
+        smtpUser: 'SMTP username — usually your full email address.',
+        smtpPassword: 'SMTP password — your App Password.',
+        smtpFrom: 'From address — the email address shown to clients.',
+        smtpTlsMode: 'TLS mode — recommended STARTTLS.',
+        smtpUseTls: 'Use TLS — should be ON.',
+      },
+
+      securityTitle: 'Security',
+      securityBody:
+        'Your password is stored locally on your computer. The app does not send your credentials anywhere except to your SMTP server. No cloud, no external server.',
+
+      testTitle: 'Test',
+      testButton: 'Test email settings',
+      testHelp: 'Sends a test email to your company email address.',
+      testSuccess: 'Test email sent successfully.',
+      testError: 'Failed to send test email: {{message}}',
+    },
   },
   overview: {
     title: 'Overview',
