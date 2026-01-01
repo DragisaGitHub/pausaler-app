@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>License Generator</title>
+    <style>
+      :root { color-scheme: light; }
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; }
+      .container { padding: 16px; max-width: 900px; margin: 0 auto; }
+      h1 { font-size: 18px; margin: 0 0 12px; }
+      .row { display: flex; gap: 12px; flex-wrap: wrap; }
+      .col { flex: 1; min-width: 320px; }
+      label { display: block; font-size: 12px; margin: 10px 0 6px; color: #333; }
+      textarea, input, select { width: 100%; box-sizing: border-box; padding: 10px; font-size: 13px; }
+      textarea { min-height: 110px; resize: vertical; }
+      .actions { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+      button { padding: 10px 12px; font-size: 13px; cursor: pointer; }
+      .muted { font-size: 12px; color: #666; margin-top: 10px; }
+      .status { margin-top: 10px; font-size: 12px; }
+      .error { color: #b00020; }
+      .ok { color: #0a6; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>License Generator (dev/testing)</h1>
+      <div class="muted">
+        This app uses the dev signing key embedded in the repo. Do not ship this to customers.
+      </div>
+
+      <div class="row">
+        <div class="col">
+          <label for="activation">Activation code</label>
+          <textarea id="activation" class="mono" placeholder="Paste activation code from Pausaler app..."></textarea>
+
+          <label for="kind">License type</label>
+          <select id="kind">
+            <option value="yearly">Yearly</option>
+            <option value="lifetime">Lifetime</option>
+          </select>
+
+          <div class="actions">
+            <button id="generate">Generate license</button>
+            <button id="copyLicense" disabled>Copy license</button>
+            <button id="showPub">Show public key</button>
+          </div>
+
+          <div id="status" class="status"></div>
+        </div>
+
+        <div class="col">
+          <label for="license">Generated license</label>
+          <textarea id="license" class="mono" readonly placeholder="Generated license will appear here..."></textarea>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

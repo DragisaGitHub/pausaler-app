@@ -31,6 +31,8 @@ import {
 import { mandatoryInvoiceNoteLines } from '../services/mandatoryInvoiceNote';
 import { useTranslation } from 'react-i18next';
 import { getNumberLocale, normalizeLanguage } from '../i18n';
+import { useLicenseGate } from '../components/LicenseGate';
+import { isFeatureAllowed } from '../services/featureGate';
 
 const storage = getStorage();
 
@@ -38,6 +40,12 @@ export function InvoiceViewPage() {
   const { t, i18n } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+
+  const { status: licenseStatus } = useLicenseGate();
+
+  const canWriteInvoices = isFeatureAllowed(licenseStatus, 'INVOICES_WRITE');
+  const canExportPdf = isFeatureAllowed(licenseStatus, 'INVOICES_EXPORT_PDF');
+  const canSendEmail = isFeatureAllowed(licenseStatus, 'INVOICES_SEND_EMAIL');
 
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [client, setClient] = useState<Client | undefined>(undefined);
@@ -82,6 +90,10 @@ export function InvoiceViewPage() {
   const numberLocale = getNumberLocale(normalizeLanguage(i18n.language));
 
   const handleExportPdf = async () => {
+    if (!canExportPdf) {
+      message.error(t('license.lockedDescription'));
+      return;
+    }
     if (exporting) return;
 
     if (!invoice.items?.length) {
@@ -136,6 +148,10 @@ export function InvoiceViewPage() {
   };
 
   const handleUpdateInvoice = async (patch: Partial<Invoice>) => {
+    if (!canWriteInvoices) {
+      message.error(t('license.lockedDescription'));
+      return;
+    }
     if (updatingMeta) return;
 
     try {
@@ -177,6 +193,10 @@ export function InvoiceViewPage() {
   };
 
   const handleSendEmail = async () => {
+    if (!canSendEmail) {
+      message.error(t('license.lockedDescription'));
+      return;
+    }
     if (sendingEmail) return;
 
     try {
@@ -293,7 +313,7 @@ export function InvoiceViewPage() {
               <Button
                 icon={<MailOutlined />}
                 onClick={openSendEmail}
-                disabled={!smtpConfigured || !clientEmail}
+                disabled={!canSendEmail || !smtpConfigured || !clientEmail}
               >
                 {t('invoiceView.sendEmail')}
               </Button>
@@ -301,6 +321,7 @@ export function InvoiceViewPage() {
           </Tooltip>
           <Button
             icon={<EditOutlined />}
+            disabled={!canWriteInvoices}
             onClick={() => navigate('/invoices/new', { state: { editId: invoice.id } })}
           >
             {t('common.edit')}
@@ -310,6 +331,7 @@ export function InvoiceViewPage() {
             icon={<FilePdfOutlined />}
             loading={exporting}
             onClick={handleExportPdf}
+            disabled={!canExportPdf}
           >
             {t('invoiceView.exportPdf')}
           </Button>
@@ -425,7 +447,7 @@ export function InvoiceViewPage() {
                     style={{ width: 160 }}
                     value={invoice.status}
                     onChange={(value) => void handleUpdateInvoice({ status: value as Invoice['status'] })}
-                    disabled={updatingMeta}
+                    disabled={!canWriteInvoices || updatingMeta}
                     options={INVOICE_STATUS_VALUES.map((s) => ({
                       value: s,
                       label: t(`invoiceStatus.${s}`),
@@ -436,7 +458,7 @@ export function InvoiceViewPage() {
               <Descriptions.Item label={t('invoiceView.dueDate')}>
                 <DatePicker
                   allowClear
-                  disabled={updatingMeta}
+                  disabled={!canWriteInvoices || updatingMeta}
                   format="DD.MM.YYYY"
                   value={invoice.dueDate ? dayjs(invoice.dueDate) : null}
                   onChange={(d) =>

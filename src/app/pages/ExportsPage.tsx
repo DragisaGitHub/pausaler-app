@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
 
 import { getStorage } from '../services/storageProvider';
+import { useLicenseGate } from '../components/LicenseGate';
+import { isFeatureAllowed } from '../services/featureGate';
 
 const storage = getStorage();
 
@@ -32,6 +34,10 @@ function basename(path: string): string {
 export function ExportsPage() {
   const { t } = useTranslation();
 
+  const { status } = useLicenseGate();
+
+  const canExportCsv = isFeatureAllowed(status, 'EXPORTS_CSV');
+
   const [exporting, setExporting] = useState(false);
   const [form] = Form.useForm<ExportFormValues>();
 
@@ -45,6 +51,10 @@ export function ExportsPage() {
   }, []);
 
   const handleExport = async () => {
+    if (!canExportCsv) {
+      message.error(t('license.lockedDescription'));
+      return;
+    }
     const values = await form.validateFields();
 
     const from = values.from.format('YYYY-MM-DD');
@@ -139,7 +149,7 @@ export function ExportsPage() {
         </Space>
 
         <div style={{ marginTop: 16 }}>
-          <Button type="primary" onClick={() => void handleExport()} loading={exporting}>
+          <Button type="primary" onClick={() => void handleExport()} loading={exporting} disabled={!canExportCsv}>
             {t('exports.exportButton')}
           </Button>
         </div>

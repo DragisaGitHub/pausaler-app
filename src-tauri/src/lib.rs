@@ -19,6 +19,8 @@ use lettre::transport::smtp::client::{Tls, TlsParameters};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{SmtpTransport, Transport};
 
+mod license;
+
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 #[serde(rename_all = "camelCase")]
@@ -2486,6 +2488,23 @@ fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+fn app_meta_get(conn: &Connection, key: &str) -> Result<Option<String>, rusqlite::Error> {
+    conn.query_row(
+        "SELECT value FROM app_meta WHERE key = ?1",
+        params![key],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+fn app_meta_set(conn: &Connection, key: &str, value: &str) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO app_meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
 fn apply_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     let mut v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
 
@@ -4021,6 +4040,13 @@ pub fn run() {
             export_invoice_pdf_to_downloads,
             export_invoices_csv,
             export_expenses_csv,
+            get_app_meta,
+            set_app_meta,
+            hash_pib,
+            get_force_locked_env,
+            get_force_lock_level_env,
+            generate_activation_code,
+            verify_license,
             get_settings,
             update_settings,
             generate_invoice_number,
@@ -4327,4 +4353,85 @@ fn draw_inline_labeled_row(
     }
 
     y - (value_lines.len() as f32) * line_height - row_gap
+}
+
+#[tauri::command]
+async fn get_app_meta(state: tauri::State<'_, DbState>, key: String) -> Result<Option<String>, String> {
+    state.with_read("get_app_meta", move |conn| app_meta_get(conn, &key)).await
+}
+
+#[tauri::command]
+async fn set_app_meta(state: tauri::State<'_, DbState>, key: String, value: String) -> Result<bool, String> {
+    state
+        .with_write("set_app_meta", move |conn| {
+            app_meta_set(conn, &key, &value)?;
+            Ok(true)
+        })
+        .await
+}
+
+#[tauri::command]
+fn hash_pib(pib: String) -> String {
+    license::crypto::sha256_hex(pib.trim())
+}
+
+#[tauri::command]
+fn get_force_locked_env() -> bool {
+    if !cfg!(debug_assertions) {
+        return false;
+    }
+
+    let raw = match std::env::var("PAUSALER_FORCE_LOCKED") {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "y" | "on"
+    )
+}
+
+#[tauri::command]
+fn get_force_lock_level_env() -> Option<String> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+
+    // New multi-level override.
+    if let Ok(raw) = std::env::var("PAUSALER_FORCE_LOCK_LEVEL") {
+        let v = raw.trim().to_ascii_lowercase();
+        let normalized = match v.as_str() {
+            "view_only" | "view-only" | "viewonly" => Some("VIEW_ONLY"),
+            "hard" | "locked" | "lock" => Some("HARD"),
+            "none" | "off" | "0" | "false" | "no" => None,
+            _ => None,
+        };
+        if let Some(level) = normalized {
+            return Some(level.to_string());
+        }
+    }
+
+    // Backward-compatible boolean override => HARD.
+    if get_force_locked_env() {
+        return Some("HARD".to_string());
+    }
+
+    None
+}
+
+#[tauri::command]
+fn generate_activation_code(pib: String) -> Result<String, String> {
+    let pib_hash = license::crypto::sha256_hex(pib.trim());
+    let app_id = "com.dstankovski.pausaler-app".to_string();
+    let issued_at = OffsetDateTime::now_utc().unix_timestamp();
+    license::activation_code::generate_activation_code(pib_hash, app_id, issued_at)
+}
+
+#[tauri::command]
+fn verify_license(license: String, pib: String) -> Result<license::license_payload::VerifiedLicenseInfo, String> {
+    let public_key_pem = include_str!("../assets/public_key.pem");
+    let pib_hash = license::crypto::sha256_hex(pib.trim());
+    let now = OffsetDateTime::now_utc();
+    license::license_validator::verify_license(&license, &pib_hash, public_key_pem, now)
 }

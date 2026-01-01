@@ -16,9 +16,13 @@ import { Client } from '../types';
 import {useClients} from "../hooks/useClients.ts";
 import { useTranslation } from 'react-i18next';
 import { useSerbiaCities } from '../hooks/useSerbiaCities';
+import { useLicenseGate } from '../components/LicenseGate';
+import { isFeatureAllowed } from '../services/featureGate';
 
 export function ClientsPage() {
   const { t } = useTranslation();
+  const { status } = useLicenseGate();
+  const canWriteClients = isFeatureAllowed(status, 'CLIENTS_WRITE');
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [form] = Form.useForm();
@@ -28,18 +32,30 @@ export function ClientsPage() {
   const { clients, createClient, updateClient, deleteClient } = useClients();
 
   const handleAdd = () => {
+    if (!canWriteClients) {
+      message.error(t('license.lockedDescription'));
+      return;
+    }
     setEditingClient(null);
     form.resetFields();
     setIsModalVisible(true);
   };
 
   const handleEdit = (client: Client) => {
+    if (!canWriteClients) {
+      message.error(t('license.lockedDescription'));
+      return;
+    }
     setEditingClient(client);
     form.setFieldsValue(client);
     setIsModalVisible(true);
   };
 
   const handleDelete = async (id: string) => {
+    if (!canWriteClients) {
+      message.error(t('license.lockedDescription'));
+      return;
+    }
     const ok = await deleteClient(id);
     if (ok) {
       message.success(t('clients.deleted'));
@@ -49,6 +65,10 @@ export function ClientsPage() {
   };
 
   const handleSubmit = async (values: Omit<Client, 'id' | 'createdAt'>) => {
+    if (!canWriteClients) {
+      message.error(t('license.lockedDescription'));
+      return;
+    }
     if (editingClient) {
       const updated = await updateClient(editingClient.id, values);
       if (updated) {
@@ -110,6 +130,7 @@ export function ClientsPage() {
             <Button
                 type="link"
                 icon={<EditOutlined />}
+                disabled={!canWriteClients}
                 onClick={() => handleEdit(record)}
             >
               {t('common.edit')}
@@ -117,6 +138,7 @@ export function ClientsPage() {
             <Popconfirm
                 title={t('clients.deleteTitle')}
                 description={t('clients.deleteDesc')}
+              disabled={!canWriteClients}
               onConfirm={() => void handleDelete(record.id)}
                 okText={t('common.yes')}
                 cancelText={t('common.no')}
@@ -145,6 +167,7 @@ export function ClientsPage() {
               type="primary"
               icon={<PlusOutlined />}
               size="large"
+              disabled={!canWriteClients}
               onClick={handleAdd}
           >
             {t('clients.add')}
@@ -166,7 +189,7 @@ export function ClientsPage() {
                       description={t('clients.empty')}
                       image={Empty.PRESENTED_IMAGE_SIMPLE}
                   >
-                    <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
+                    <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} disabled={!canWriteClients}>
                       {t('clients.addFirst')}
                     </Button>
                   </Empty>
@@ -184,7 +207,7 @@ export function ClientsPage() {
             footer={null}
             width={600}
         >
-          <Form form={form} layout="vertical" onFinish={handleSubmit} size="large">
+          <Form form={form} layout="vertical" onFinish={handleSubmit} size="large" disabled={!canWriteClients}>
             <Form.Item
                 label={t('clients.name')}
                 name="name"
@@ -285,7 +308,7 @@ export function ClientsPage() {
                 >
                   {t('common.cancel')}
                 </Button>
-                <Button type="primary" htmlType="submit">
+                <Button type="primary" htmlType="submit" disabled={!canWriteClients}>
                   {editingClient ? t('clients.update') : t('clients.add')}
                 </Button>
               </Space>

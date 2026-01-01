@@ -21,6 +21,8 @@ import type { Expense, ExpenseRange } from '../types';
 import { CURRENCY_VALUES } from '../types';
 import { useExpenses } from '../hooks/useExpenses';
 import { useSettings } from '../hooks/useSettings';
+import { useLicenseGate } from '../components/LicenseGate';
+import { isFeatureAllowed } from '../services/featureGate';
 
 const { RangePicker } = DatePicker;
 
@@ -37,6 +39,9 @@ export function ExpensesPage() {
   const { t } = useTranslation();
   const { settings } = useSettings();
   const defaultCurrency = settings?.defaultCurrency ?? 'RSD';
+
+  const { status } = useLicenseGate();
+  const canWriteExpenses = isFeatureAllowed(status, 'EXPENSES_WRITE');
 
   const { expenses, listExpenses, createExpense, updateExpense, deleteExpense } = useExpenses();
 
@@ -55,6 +60,10 @@ export function ExpensesPage() {
   };
 
   const handleAdd = () => {
+    if (!canWriteExpenses) {
+      message.error(t('license.lockedDescription'));
+      return;
+    }
     setEditingExpense(null);
     form.resetFields();
     form.setFieldsValue({
@@ -65,6 +74,10 @@ export function ExpensesPage() {
   };
 
   const handleEdit = (expense: Expense) => {
+    if (!canWriteExpenses) {
+      message.error(t('license.lockedDescription'));
+      return;
+    }
     setEditingExpense(expense);
     form.setFieldsValue({
       title: expense.title,
@@ -78,6 +91,10 @@ export function ExpensesPage() {
   };
 
   const handleDelete = async (id: string) => {
+    if (!canWriteExpenses) {
+      message.error(t('license.lockedDescription'));
+      return;
+    }
     const ok = await deleteExpense(id);
     if (ok) {
       message.success(t('expenses.deleted'));
@@ -87,6 +104,10 @@ export function ExpensesPage() {
   };
 
   const handleSubmit = async (values: ExpenseFormValues) => {
+    if (!canWriteExpenses) {
+      message.error(t('license.lockedDescription'));
+      return;
+    }
     const title = values.title.trim();
     const categoryTrimmed = (values.category ?? '').trim();
     const notesTrimmed = (values.notes ?? '').trim();
@@ -186,12 +207,13 @@ export function ExpensesPage() {
       width: 160,
       render: (_: unknown, record: Expense) => (
         <Space size="small">
-          <Button type="link" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
+          <Button type="link" icon={<EditOutlined />} onClick={() => handleEdit(record)} disabled={!canWriteExpenses}>
             {t('common.edit')}
           </Button>
           <Popconfirm
             title={t('expenses.deleteTitle')}
             description={t('expenses.deleteDesc')}
+            disabled={!canWriteExpenses}
             onConfirm={() => void handleDelete(record.id)}
             okText={t('common.yes')}
             cancelText={t('common.no')}
@@ -236,7 +258,7 @@ export function ExpensesPage() {
             format="DD.MM.YYYY"
             allowClear
           />
-          <Button type="primary" icon={<PlusOutlined />} size="large" onClick={handleAdd}>
+          <Button type="primary" icon={<PlusOutlined />} size="large" onClick={handleAdd} disabled={!canWriteExpenses}>
             {t('expenses.add')}
           </Button>
         </Space>
@@ -254,7 +276,7 @@ export function ExpensesPage() {
         locale={{
           emptyText: (
             <Empty description={t('expenses.empty')} image={Empty.PRESENTED_IMAGE_SIMPLE}>
-              <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
+              <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} disabled={!canWriteExpenses}>
                 {t('expenses.addFirst')}
               </Button>
             </Empty>
@@ -272,7 +294,7 @@ export function ExpensesPage() {
         footer={null}
         width={640}
       >
-        <Form form={form} layout="vertical" onFinish={handleSubmit} size="large">
+        <Form form={form} layout="vertical" onFinish={handleSubmit} size="large" disabled={!canWriteExpenses}>
           <Form.Item label={t('expenses.titleCol')} name="title" rules={[{ required: true, message: t('expenses.titleReq') }]}>
             <Input placeholder={t('expenses.titlePlaceholder')} />
           </Form.Item>
@@ -326,7 +348,7 @@ export function ExpensesPage() {
               >
                 {t('common.cancel')}
               </Button>
-              <Button type="primary" htmlType="submit">
+              <Button type="primary" htmlType="submit" disabled={!canWriteExpenses}>
                 {editingExpense ? t('expenses.update') : t('expenses.add')}
               </Button>
             </Space>

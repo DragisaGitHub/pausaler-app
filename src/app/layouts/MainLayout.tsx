@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Layout, Menu, theme } from 'antd';
-import { FileTextOutlined, UserOutlined, SettingOutlined, DashboardOutlined, BarChartOutlined, DollarOutlined, ExportOutlined, FileSearchOutlined } from '@ant-design/icons';
+import { FileTextOutlined, UserOutlined, SettingOutlined, DashboardOutlined, BarChartOutlined, DollarOutlined, ExportOutlined, FileSearchOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import { Link, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { TitleBar } from '../components/TitleBar';
+import { LicenseGate } from '../components/LicenseGate';
 
 const { Sider, Content } = Layout;
 
@@ -63,6 +64,12 @@ export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
       icon: <SettingOutlined />,
       disabled: needsSetup,
       label: needsSetup ? <span>{t('nav.settings')}</span> : <Link to="/settings">{t('nav.settings')}</Link>,
+    },
+    {
+      key: '/license',
+      icon: <SafetyCertificateOutlined />,
+      disabled: false,
+      label: <Link to="/license">{t('nav.license')}</Link>,
     },
   ];
 
@@ -131,7 +138,9 @@ export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
                 borderRadius: 8,
               }}
             >
-              <Outlet />
+              <LicenseGate needsSetup={needsSetup}>
+                <Outlet />
+              </LicenseGate>
             </div>
           </Content>
         </Layout>
