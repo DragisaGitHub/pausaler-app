@@ -1,0 +1,80 @@
+name: CI Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Build (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          yarn --frozen-lockfile
+
+      - name: Build frontend
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          yarn build
+
+      - name: Build Tauri bundles
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          yarn tauri build
+
+      - name: Verify bundle outputs exist
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $nsis = Get-ChildItem -Path 'src-tauri/target/release/bundle/nsis' -Filter '*.exe' -ErrorAction SilentlyContinue
+          $msi  = Get-ChildItem -Path 'src-tauri/target/release/bundle/msi'  -Filter '*.msi' -ErrorAction SilentlyContinue
+
+          if (-not $nsis -or $nsis.Count -lt 1) {
+            throw 'NSIS bundle not found at src-tauri/target/release/bundle/nsis/*.exe'
+          }
+
+          if (-not $msi -or $msi.Count -lt 1) {
+            throw 'MSI bundle not found at src-tauri/target/release/bundle/msi/*.msi'
+          }
+
+          Write-Host "Found NSIS installers: $($nsis.Count)"
+          Write-Host "Found MSI installers: $($msi.Count)"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: paushaler-windows-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/pausaler-app.exe
