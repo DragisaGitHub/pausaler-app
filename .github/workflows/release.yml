@@ -81,6 +81,23 @@ jobs:
           Write-Host "Found NSIS installers: $($nsis.Count)"
           Write-Host "Found MSI installers: $($msi.Count)"
 
+      - name: Create stable asset names (no version)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $nsisFile = Get-ChildItem -Path 'src-tauri/target/release/bundle/nsis' -Filter '*_x64-setup.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $nsisFile) { throw 'Could not find *_x64-setup.exe in src-tauri/target/release/bundle/nsis' }
+
+          $msiFile = Get-ChildItem -Path 'src-tauri/target/release/bundle/msi' -Filter '*_x64_*.msi' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $msiFile) { throw 'Could not find *_x64_*.msi in src-tauri/target/release/bundle/msi' }
+
+          Copy-Item -Path $nsisFile.FullName -Destination (Join-Path $nsisFile.Directory.FullName 'Paushaler-setup.exe') -Force
+          Copy-Item -Path $msiFile.FullName  -Destination (Join-Path $msiFile.Directory.FullName  'Paushaler.msi')       -Force
+
+          Get-ChildItem -Path 'src-tauri/target/release/bundle/nsis' -Filter 'Paushaler-setup.exe' | Out-Null
+          Get-ChildItem -Path 'src-tauri/target/release/bundle/msi'  -Filter 'Paushaler.msi'       | Out-Null
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -91,5 +108,7 @@ jobs:
           files: |
             src-tauri/target/release/bundle/nsis/*_x64-setup.exe
             src-tauri/target/release/bundle/msi/*_x64_*.msi
+            src-tauri/target/release/bundle/nsis/Paushaler-setup.exe
+            src-tauri/target/release/bundle/msi/Paushaler.msi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
