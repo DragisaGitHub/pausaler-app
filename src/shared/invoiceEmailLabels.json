@@ -6,7 +6,7 @@
     "introWithPdf": "Faktura je priložena u PDF formatu.",
     "introWithoutPdf": "Faktura je poslata bez PDF priloga.",
 
-    "company": "Firma",
+    "company": "Naziv preduzeća",
     "companyRegistrationNumber": "Matični broj",
     "client": "Komitent",
     "clientRegistrationNumber": "Matični broj komitenta",

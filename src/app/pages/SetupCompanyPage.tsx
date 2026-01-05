@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
-import { Alert, Button, Card, Form, Input, Upload, message, Space, Typography } from 'antd';
+import { Alert, Button, Card, Form, Input, Select, Upload, message, Space, Typography } from 'antd';
 import { UploadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { Settings } from '../types';
+import { useSerbiaCities, type SerbiaCitySelectOption } from '../hooks/useSerbiaCities';
 import { getStorage } from '../services/storageProvider';
 import { generateActivationCode } from '../services/licenseCodeGenerator';
 import { startTrialIfNeeded } from '../services/trialService';
@@ -14,7 +15,15 @@ type SetupCompanyPageProps = {
 
 type SetupCompanyForm = Pick<
   Settings,
-  'companyName' | 'registrationNumber' | 'pib' | 'companyAddressLine' | 'companyCity' | 'companyPostalCode' | 'bankAccount'
+  | 'companyName'
+  | 'registrationNumber'
+  | 'pib'
+  | 'companyAddressLine'
+  | 'companyCity'
+  | 'companyPostalCode'
+  | 'bankAccount'
+  | 'companyEmail'
+  | 'companyPhone'
 >;
 
 const storage = getStorage();
@@ -27,6 +36,8 @@ export function SetupCompanyPage({ onCompleted }: SetupCompanyPageProps) {
   const [logoUrl, setLogoUrl] = useState('');
   const [activationCode, setActivationCode] = useState('');
   const [generating, setGenerating] = useState(false);
+
+  const serbiaCities = useSerbiaCities();
 
   const pibValue = Form.useWatch('pib', form);
   const pibTrimmed = useMemo(() => String(pibValue ?? '').trim(), [pibValue]);
@@ -147,7 +158,25 @@ export function SetupCompanyPage({ onCompleted }: SetupCompanyPageProps) {
               name="companyCity"
               rules={[{ required: true, message: t('settings.companyCityReq') }]}
             >
-              <Input placeholder={t('settings.companyCityPlaceholder')} />
+              <Select<string, SerbiaCitySelectOption>
+                showSearch
+                allowClear
+                placeholder={t('settings.companyCityPlaceholder')}
+                loading={serbiaCities.loading}
+                options={serbiaCities.options}
+                filterOption={false}
+                onSearch={serbiaCities.search}
+                onClear={() => {
+                  form.setFieldValue('companyPostalCode', '');
+                }}
+                onSelect={(_, option) => {
+                  const opt = Array.isArray(option) ? option[0] : option;
+                  const postalCode = String(opt?.postalCode ?? '').trim();
+                  if (postalCode) {
+                    form.setFieldValue('companyPostalCode', postalCode);
+                  }
+                }}
+              />
             </Form.Item>
 
             <Form.Item
@@ -168,6 +197,36 @@ export function SetupCompanyPage({ onCompleted }: SetupCompanyPageProps) {
               ]}
             >
               <Input placeholder={t('settings.companyPostalCodePlaceholder')} />
+            </Form.Item>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <Form.Item
+              label={t('settings.companyEmail')}
+              name="companyEmail"
+              rules={[{ type: 'email', message: t('settings.companyEmailInvalid') }]}
+            >
+              <Input placeholder={t('settings.companyEmailPlaceholder')} />
+            </Form.Item>
+
+            <Form.Item
+              label={t('settings.companyPhone')}
+              name="companyPhone"
+              rules={[
+                () => ({
+                  validator(_, value) {
+                    const raw = String(value ?? '').trim();
+                    if (!raw) return Promise.resolve();
+                    const compact = raw.replace(/[\s\-()]/g, '');
+                    if (compact.length < 6) {
+                      return Promise.reject(new Error(t('settings.companyPhoneInvalid')));
+                    }
+                    return Promise.resolve();
+                  },
+                }),
+              ]}
+            >
+              <Input placeholder={t('settings.companyPhonePlaceholder')} />
             </Form.Item>
           </div>
 

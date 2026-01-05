@@ -358,6 +358,27 @@ fn render_invoice_email(
     let total = format_money(invoice.total);
     let currency = invoice.currency.trim();
 
+    let company_name = settings.company_name.trim();
+    let company_name = if company_name.is_empty() { "-" } else { company_name };
+
+    let company_address_line = settings.company_address_line.trim();
+    let company_postal_code = settings.company_postal_code.trim();
+    let company_city = settings.company_city.trim();
+    let company_postal_and_city = [company_postal_code, company_city]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let company_address = if !company_address_line.is_empty() && !company_postal_and_city.is_empty() {
+        Some(format!("{}, {}", company_address_line, company_postal_and_city))
+    } else if !company_address_line.is_empty() {
+        Some(company_address_line.to_string())
+    } else if !company_postal_and_city.is_empty() {
+        Some(company_postal_and_city)
+    } else {
+        None
+    };
+
     let vat_id = settings.pib.trim();
     if vat_id.is_empty() {
         return Err("Issuer VAT ID (PIB) is missing in Settings.".to_string());
@@ -394,6 +415,13 @@ fn render_invoice_email(
     }
 
     // A) INVOICE / ISSUER DETAILS (TOP BLOCK) — exact order
+    push_kv_text(&mut text, &labels.company, company_name);
+    if let Some(addr) = company_address.as_deref() {
+        let a = addr.trim();
+        if !a.is_empty() {
+            text.push_str(&format!("  {}\n", a));
+        }
+    }
     push_kv_text(&mut text, &labels.vat_id, vat_id);
     push_kv_text(&mut text, &labels.invoice_number, invoice_number);
     push_kv_text(&mut text, &labels.issue_date, issue_date);
@@ -441,6 +469,8 @@ fn render_invoice_email(
     let html_note = note.map(escape_html);
     let html_bank_account = bank_account.map(escape_html);
     let html_vat_id = escape_html(vat_id);
+    let html_company_name = escape_html(company_name);
+    let html_company_address = company_address.as_deref().map(escape_html);
 
     fn push_detail_row(html: &mut String, label: &str, value: &str) {
         let v = value.trim();
@@ -478,6 +508,16 @@ fn render_invoice_email(
 <tr><td style=\"padding:14px;\">\
 <table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\">\
 ");
+
+    html.push_str(&format!(
+        "<tr><td style=\"padding:6px 0;font-size:13px;color:#4b5563;\">{}</td><td align=\"right\" style=\"padding:6px 0;font-size:13px;color:#111827;font-weight:600;\"><div>{}</div>{}</td></tr>",
+        escape_html(labels.company.as_str()),
+        html_company_name,
+        html_company_address
+            .as_deref()
+            .map(|a| format!("<div style=\\\"margin-top:2px;font-size:12px;color:#6b7280;font-weight:500;\\\">{}</div>", a))
+            .unwrap_or_else(|| "".to_string())
+    ));
 
     push_detail_row(&mut html, labels.vat_id.as_str(), &html_vat_id);
     push_detail_row(&mut html, labels.invoice_number.as_str(), invoice_number);

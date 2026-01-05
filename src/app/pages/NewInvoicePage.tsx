@@ -37,6 +37,7 @@ import { useTranslation } from 'react-i18next';
 import { getNumberLocale, normalizeLanguage } from '../i18n';
 import { useLicenseGate } from '../components/LicenseGate';
 import { isFeatureAllowed } from '../services/featureGate';
+import { useSerbiaCities, type SerbiaCitySelectOption } from '../hooks/useSerbiaCities';
 
 const storage = getStorage();
 
@@ -50,6 +51,8 @@ export function NewInvoicePage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { status } = useLicenseGate();
+
+  const serbiaCities = useSerbiaCities();
 
   const canWriteInvoices = isFeatureAllowed(status, 'INVOICES_WRITE');
   const canWriteClients = isFeatureAllowed(status, 'CLIENTS_WRITE');
@@ -697,12 +700,60 @@ export function NewInvoicePage() {
             <Input placeholder="12345678" />
           </Form.Item>
           <Form.Item
-            label={t('clients.address')}
+            label={t('clients.addressLine1')}
             name="address"
-            rules={[{ required: true, message: t('clients.addressReq') }]}
+            rules={[{ required: true, message: t('clients.addressLine1Req') }]}
           >
-            <Input placeholder="Ulica i broj, grad" />
+            <Input placeholder={t('clients.addressLine1Placeholder')} />
           </Form.Item>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <Form.Item
+              label={t('clients.city')}
+              name="city"
+              rules={[{ required: true, message: t('clients.cityReq') }]}
+            >
+              <Select<string, SerbiaCitySelectOption>
+                showSearch
+                allowClear
+                placeholder={t('clients.cityPlaceholder')}
+                loading={serbiaCities.loading}
+                options={serbiaCities.options}
+                filterOption={false}
+                onSearch={serbiaCities.search}
+                onClear={() => {
+                  clientForm.setFieldValue('postalCode', '');
+                }}
+                onSelect={(_, option) => {
+                  const opt = Array.isArray(option) ? option[0] : option;
+                  const postalCode = String(opt?.postalCode ?? '').trim();
+                  if (postalCode) {
+                    clientForm.setFieldValue('postalCode', postalCode);
+                  }
+                }}
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={t('clients.postalCode')}
+              name="postalCode"
+              rules={[
+                { required: true, message: t('clients.postalCodeReq') },
+                () => ({
+                  validator(_, value) {
+                    const v = String(value ?? '').trim();
+                    if (!v) return Promise.resolve();
+                    if (!/^[0-9-]+$/.test(v)) {
+                      return Promise.reject(new Error(t('clients.postalCodeInvalid')));
+                    }
+                    return Promise.resolve();
+                  },
+                }),
+              ]}
+            >
+              <Input placeholder={t('clients.postalCodePlaceholder')} />
+            </Form.Item>
+          </div>
           <Form.Item
             label={t('clients.email')}
             name="email"
@@ -712,6 +763,26 @@ export function NewInvoicePage() {
             ]}
           >
             <Input placeholder="kontakt@firma.rs" />
+          </Form.Item>
+
+          <Form.Item
+            label={t('settings.companyPhone')}
+            name="phone"
+            rules={[
+              () => ({
+                validator(_, value) {
+                  const raw = String(value ?? '').trim();
+                  if (!raw) return Promise.resolve();
+                  const compact = raw.replace(/[\s\-()]/g, '');
+                  if (compact.length < 6) {
+                    return Promise.reject(new Error(t('settings.companyPhoneInvalid')));
+                  }
+                  return Promise.resolve();
+                },
+              }),
+            ]}
+          >
+            <Input placeholder={t('settings.companyPhonePlaceholder')} />
           </Form.Item>
           <Form.Item>
             <Space style={{ width: '100%', justifyContent: 'flex-end' }}>

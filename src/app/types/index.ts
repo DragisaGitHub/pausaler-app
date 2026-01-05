@@ -8,6 +8,7 @@ export interface Client {
   city: string;
   postalCode: string;
   email: string;
+  phone?: string;
   createdAt: string;
 }
 

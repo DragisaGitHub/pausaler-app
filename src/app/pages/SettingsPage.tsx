@@ -6,7 +6,7 @@ import { Settings, CURRENCY_VALUES } from '../types';
 import { useSettings } from '../hooks/useSettings';
 import { useTranslation } from 'react-i18next';
 import i18n, { normalizeLanguage } from '../i18n';
-import { useSerbiaCities } from '../hooks/useSerbiaCities';
+import { useSerbiaCities, type SerbiaCitySelectOption } from '../hooks/useSerbiaCities';
 import { useLicenseGate } from '../components/LicenseGate';
 import { isFeatureAllowed } from '../services/featureGate';
 import { isSmtpConfigured } from '../services/smtp';
@@ -167,7 +167,7 @@ export function SettingsPage() {
                         name="companyCity"
                         rules={[{ required: true, message: t('settings.companyCityReq') }]}
                       >
-                        <Select
+                        <Select<string, SerbiaCitySelectOption>
                           showSearch
                           allowClear
                           placeholder={t('settings.companyCityPlaceholder')}
@@ -179,7 +179,8 @@ export function SettingsPage() {
                             form.setFieldValue('companyPostalCode', '');
                           }}
                           onSelect={(_, option) => {
-                            const postalCode = String((option as any)?.postalCode ?? '').trim();
+                            const opt = Array.isArray(option) ? option[0] : option;
+                            const postalCode = String(opt?.postalCode ?? '').trim();
                             if (postalCode) {
                               form.setFieldValue('companyPostalCode', postalCode);
                             }
