@@ -62,7 +62,7 @@ jobs:
           }
 
           if ($tauriVersion -ne $tagVersion) {
-            throw "Tag version ($tagVersion) does not match src-tauri/tauri.conf.json version ($tauriVersion). Bump version in src-tauri/tauri.conf.json, commit, and re-tag."
+            throw "Tag version ($tagVersion) does not match src-tauri/tauri.conf.json version ($tauriVersion). Bump version, commit, and re-tag."
           }
 
           Write-Host "Version OK: $tagVersion"
@@ -92,6 +92,20 @@ jobs:
           Write-Host "Found NSIS installers: $($nsis.Count)"
           Write-Host "Found MSI installers: $($msi.Count)"
 
+      - name: Create stable download filenames
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $nsis = Get-ChildItem -Path 'src-tauri/target/release/bundle/nsis' -Filter '*.exe' | Select-Object -First 1
+          $msi  = Get-ChildItem -Path 'src-tauri/target/release/bundle/msi'  -Filter '*.msi' | Select-Object -First 1
+
+          if (-not $nsis) { throw 'NSIS installer not found' }
+          if (-not $msi)  { throw 'MSI installer not found' }
+
+          Copy-Item $nsis.FullName 'src-tauri/target/release/bundle/nsis/Paushaler-setup.exe' -Force
+          Copy-Item $msi.FullName  'src-tauri/target/release/bundle/msi/Paushaler.msi' -Force
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -99,6 +113,8 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
+            src-tauri/target/release/bundle/nsis/Paushaler-setup.exe
+            src-tauri/target/release/bundle/msi/Paushaler.msi
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/msi/*.msi
         env:
