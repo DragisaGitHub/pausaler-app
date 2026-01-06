@@ -713,6 +713,98 @@ export function SettingsPage() {
                             </div>
                           ),
                         },
+                        {
+                          key: 'yahooExtraHelp',
+                          label: 'Yahoo – podešavanje slanja (App Password)',
+                          children: (
+                            <div>
+                              <Divider style={{ margin: '12px 0' }} />
+
+                              <Typography.Title level={5} style={{ marginTop: 0 }}>
+                                Yahoo – podešavanje slanja (App Password)
+                              </Typography.Title>
+
+                              <Typography.Paragraph style={{ marginTop: 0, marginBottom: 8 }}>
+                                <Typography.Text strong>A) Preduslov</Typography.Text>
+                              </Typography.Paragraph>
+                              <ul style={{ marginTop: 0, marginBottom: 12 }}>
+                                <li>Potreban je Yahoo mail nalog (npr. ime@yahoo.com).</li>
+                                <li>Yahoo za slanje iz aplikacije zahteva “App Password” (ne koristi se obična lozinka naloga).</li>
+                              </ul>
+
+                              <Typography.Paragraph style={{ marginTop: 0, marginBottom: 8 }}>
+                                <Typography.Text strong>B) Korak 1 – Uđite u bezbednosna podešavanja naloga</Typography.Text>
+                              </Typography.Paragraph>
+                              <ol style={{ marginTop: 0, marginBottom: 12 }}>
+                                <li>Otvorite desktop browser (Chrome/Edge).</li>
+                                <li>Ulogujte se u Yahoo nalog.</li>
+                                <li>Otvorite podešavanja bezbednosti naloga (Account Security).</li>
+                              </ol>
+
+                              <Typography.Paragraph style={{ marginTop: 0, marginBottom: 8 }}>
+                                <Typography.Text strong>C) Korak 2 – Napravite Yahoo App Password</Typography.Text>
+                              </Typography.Paragraph>
+                              <ol style={{ marginTop: 0, marginBottom: 12 }}>
+                                <li>U Account Security pronađite opciju “Generate app password” / “Create app password” (naziv može biti različit).</li>
+                                <li>Unesite naziv: Pausaler</li>
+                                <li>Kliknite Generate / Create</li>
+                                <li>Kopirajte dobijenu lozinku i nalepite je u polje “SMTP lozinka” u Pausaler aplikaciji.</li>
+                              </ol>
+
+                              <Typography.Paragraph style={{ marginTop: 0, marginBottom: 8 }}>
+                                <Typography.Text strong>D) Korak 3 – Unos lozinke (copy/paste)</Typography.Text>
+                              </Typography.Paragraph>
+                              <ul style={{ marginTop: 0, marginBottom: 12 }}>
+                                <li>Nalepite lozinku u “SMTP lozinka”.</li>
+                                <li>Kliknite “Prikaži lozinku” da proverite unos.</li>
+                                <li>Ako postoje razmaci ili novi redovi, obrišite ih (aplikacija automatski uklanja razmake).</li>
+                                <li>Kliknite “Sačuvaj podešavanja”.</li>
+                                <li>Tek onda kliknite “Testiraj email podešavanja”.</li>
+                              </ul>
+
+                              <Typography.Paragraph style={{ marginTop: 0, marginBottom: 8 }}>
+                                <Typography.Text strong>E) Yahoo SMTP podešavanja (primer za unos)</Typography.Text>
+                              </Typography.Paragraph>
+                              <ul style={{ marginTop: 0, marginBottom: 12 }}>
+                                <li>SMTP host: smtp.mail.yahoo.com</li>
+                                <li>SMTP port: 587</li>
+                                <li>TLS režim: STARTTLS</li>
+                                <li>SMTP korisnik: puna Yahoo adresa (npr. ime@yahoo.com)</li>
+                                <li>SMTP lozinka: Yahoo App Password</li>
+                              </ul>
+
+                              <Descriptions size="small" bordered column={1} title="Polje | Vrednost">
+                                <Descriptions.Item label="SMTP host">smtp.mail.yahoo.com</Descriptions.Item>
+                                <Descriptions.Item label="SMTP port">587</Descriptions.Item>
+                                <Descriptions.Item label="TLS režim">STARTTLS</Descriptions.Item>
+                                <Descriptions.Item label="SMTP korisnik">puna Yahoo adresa</Descriptions.Item>
+                                <Descriptions.Item label="SMTP lozinka">Yahoo App Password</Descriptions.Item>
+                              </Descriptions>
+
+                              <Divider style={{ margin: '12px 0' }} />
+
+                              <Typography.Paragraph style={{ marginTop: 0, marginBottom: 8 }}>
+                                <Typography.Text strong>F) Najčešće greške (Troubleshooting)</Typography.Text>
+                              </Typography.Paragraph>
+                              <ul style={{ marginTop: 0, marginBottom: 12 }}>
+                                <li>Ne mešajte provajdere: ako je host Yahoo, i SMTP korisnik i “From adresa” treba da budu Yahoo.</li>
+                                <li>SMTP korisnik mora biti puna Yahoo adresa.</li>
+                                <li>App Password nije isto što i obična lozinka naloga.</li>
+                                <li>Ako dobijete grešku 535 / previše pogrešnih pokušaja, sačekajte 15–60 minuta i pokušajte ponovo nakon provere podešavanja.</li>
+                              </ul>
+
+                              <Typography.Paragraph style={{ marginTop: 0, marginBottom: 8 }}>
+                                <Typography.Text strong>G) Napomena</Typography.Text>
+                              </Typography.Paragraph>
+                              <ul style={{ marginTop: 0, marginBottom: 0 }}>
+                                <li>Ovo uputstvo je za Yahoo.</li>
+                                <li>(Kasnije ćemo dodati i druga uputstva po istom principu.)</li>
+                              </ul>
+
+                              <Divider style={{ margin: '12px 0' }} />
+                            </div>
+                          ),
+                        },
                       ]}
                     />
                   </div>
