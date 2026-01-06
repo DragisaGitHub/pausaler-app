@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Layout, Menu, theme } from 'antd';
+import { Badge, Layout, Menu, theme } from 'antd';
 import { FileTextOutlined, UserOutlined, SettingOutlined, DashboardOutlined, BarChartOutlined, DollarOutlined, ExportOutlined, FileSearchOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import { Link, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { TitleBar } from '../components/TitleBar';
 import { LicenseGate } from '../components/LicenseGate';
+import { useUpdateBadge } from '../hooks/useUpdateBadge';
 
 const { Sider, Content } = Layout;
 
@@ -12,6 +13,7 @@ export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
   const { t } = useTranslation();
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
+  const updateBadge = useUpdateBadge();
   const {
     token: { colorBgContainer },
   } = theme.useToken();
@@ -63,7 +65,13 @@ export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
       key: '/settings',
       icon: <SettingOutlined />,
       disabled: needsSetup,
-      label: needsSetup ? <span>{t('nav.settings')}</span> : <Link to="/settings">{t('nav.settings')}</Link>,
+      label: needsSetup ? (
+        <span>{t('nav.settings')}</span>
+      ) : (
+        <Badge dot={updateBadge.available} offset={[10, 0]}>
+          <Link to="/settings">{t('nav.settings')}</Link>
+        </Badge>
+      ),
     },
     {
       key: '/license',

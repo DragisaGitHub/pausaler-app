@@ -1,0 +1,11 @@
+{
+  "version": "1.0.4",
+  "releasedAt": "2026-01-06T00:00:00Z",
+  "notes": [
+    "No changes — manifest baseline for update checks."
+  ],
+  "windows": {
+    "nsis": "https://github.com/DragisaGitHub/pausaler-app/releases/latest/download/Paushaler-setup.exe",
+    "msi": "https://github.com/DragisaGitHub/pausaler-app/releases/latest/download/Paushaler.msi"
+  }
+}

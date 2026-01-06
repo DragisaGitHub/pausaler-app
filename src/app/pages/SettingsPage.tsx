@@ -11,6 +11,9 @@ import { useLicenseGate } from '../components/LicenseGate';
 import { isFeatureAllowed } from '../services/featureGate';
 import { isSmtpConfigured } from '../services/smtp';
 import { sendTestEmail } from '../services/smtpTest';
+import { getVersion } from '@tauri-apps/api/app';
+import { listen } from '@tauri-apps/api/event';
+import { checkForUpdatesCached, downloadNsisInstaller, runInstallerAndExit, type UpdateManifest } from '../services/updateService.ts';
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -20,8 +23,18 @@ export function SettingsPage() {
   const [testingEmail, setTestingEmail] = useState(false);
   const serbiaCities = useSerbiaCities();
 
+  const [appVersion, setAppVersion] = useState<string>('');
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [updateError, setUpdateError] = useState<string>('');
+  const [latestManifest, setLatestManifest] = useState<UpdateManifest | null>(null);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [nsisUrl, setNsisUrl] = useState<string>('');
+  const [downloadingUpdate, setDownloadingUpdate] = useState(false);
+  const [downloadPct, setDownloadPct] = useState<number | null>(null);
+
   const { status } = useLicenseGate();
   const canWriteSettings = isFeatureAllowed(status, 'SETTINGS_WRITE');
+  const licenseActive = status?.isLicensed === true;
 
   const smtpHost = Form.useWatch('smtpHost', form);
   const smtpPort = Form.useWatch('smtpPort', form);
@@ -63,6 +76,86 @@ export function SettingsPage() {
     form.setFieldsValue(next);
     setLogoUrl(settings.logoUrl || '');
   }, [form, settings]);
+
+  useEffect(() => {
+    let mounted = true;
+    void getVersion()
+      .then((v) => {
+        if (!mounted) return;
+        setAppVersion(String(v ?? ''));
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setAppVersion('');
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    void listen<{ downloaded: number; total?: number | null }>('update_download_progress', (event) => {
+      const downloaded = Number((event as any)?.payload?.downloaded ?? 0);
+      const total = (event as any)?.payload?.total;
+      const tt = total == null ? null : Number(total);
+      if (!Number.isFinite(downloaded) || !Number.isFinite(tt ?? 0) || !tt || tt <= 0) {
+        setDownloadPct(null);
+        return;
+      }
+      const pct = Math.max(0, Math.min(100, Math.round((downloaded / tt) * 100)));
+      setDownloadPct(pct);
+    })
+      .then((u) => {
+        unlisten = u;
+      })
+      .catch(() => {
+        unlisten = null;
+      });
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  const handleCheckUpdates = async () => {
+    if (checkingUpdates) return;
+    setCheckingUpdates(true);
+    setUpdateError('');
+    setLatestManifest(null);
+    setUpdateAvailable(false);
+    setNsisUrl('');
+    try {
+      const current = appVersion || (await getVersion());
+      const res = await checkForUpdatesCached(String(current ?? ''), { timeoutMs: 8000, force: true });
+      setLatestManifest(res.latest);
+      setUpdateAvailable(res.updateAvailable);
+      setNsisUrl(res.nsisUrl ? res.nsisUrl : '');
+    } catch (e: any) {
+      const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
+      setUpdateError(msg || t('settings.updates.errorGeneric'));
+    } finally {
+      setCheckingUpdates(false);
+    }
+  };
+
+  const handleUpdateNow = async () => {
+    if (downloadingUpdate) return;
+    if (!nsisUrl) {
+      message.error(t('settings.updates.errorMissingInstaller'));
+      return;
+    }
+    setDownloadingUpdate(true);
+    setDownloadPct(null);
+    try {
+      const installerPath = await downloadNsisInstaller(nsisUrl);
+      await runInstallerAndExit(installerPath);
+    } catch (e: any) {
+      const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
+      message.error(msg || t('settings.updates.errorDownloadOrLaunch'));
+      setDownloadingUpdate(false);
+    }
+  };
 
   const applyDefaultTlsModeForPort = (port: number | null) => {
     if (!port) return;
@@ -516,6 +609,103 @@ export function SettingsPage() {
                         ]}
                       />
                     </Form.Item>
+                  </div>
+                ),
+              },
+              {
+                key: 'aboutUpdates',
+                label: t('settings.updates.tab'),
+                children: (
+                  <div style={{ paddingTop: 8 }}>
+                    <Typography.Paragraph style={{ marginTop: 0, marginBottom: 12 }}>
+                      <Typography.Text strong>{t('settings.updates.currentVersion')}:</Typography.Text>{' '}
+                      <Typography.Text>{appVersion || '-'}</Typography.Text>
+                    </Typography.Paragraph>
+
+                    <Space wrap style={{ marginBottom: 12 }}>
+                      <Button
+                        onClick={() => void handleCheckUpdates()}
+                        loading={checkingUpdates}
+                        disabled={false}
+                      >
+                        {t('settings.updates.checkButton')}
+                      </Button>
+                      <Typography.Text type="secondary">{t('settings.updates.checkHelp')}</Typography.Text>
+                    </Space>
+
+                    {updateError ? (
+                      <Alert
+                        type="error"
+                        showIcon
+                        message={t('settings.updates.errorTitle')}
+                        description={updateError}
+                        style={{ marginBottom: 12 }}
+                      />
+                    ) : null}
+
+                    {latestManifest && !updateAvailable ? (
+                      <Alert
+                        type="success"
+                        showIcon
+                        message={t('settings.updates.upToDate')}
+                        style={{ marginBottom: 12 }}
+                      />
+                    ) : null}
+
+                    {latestManifest && updateAvailable ? (
+                      <div>
+                        <Alert
+                          type={licenseActive ? 'info' : 'warning'}
+                          showIcon
+                          message={t('settings.updates.availableTitle', { version: latestManifest.version })}
+                          description={
+                            <div>
+                              {!licenseActive ? (
+                                <Typography.Paragraph style={{ marginTop: 0, marginBottom: 12 }}>
+                                  {t('settings.updates.requiresLicense')}
+                                </Typography.Paragraph>
+                              ) : null}
+
+                              <Descriptions bordered size="small" column={1} style={{ marginBottom: 12 }}>
+                                <Descriptions.Item label={t('settings.updates.latestVersion')}>{latestManifest.version}</Descriptions.Item>
+                                <Descriptions.Item label={t('settings.updates.releasedAt')}>{latestManifest.releasedAt || '-'}</Descriptions.Item>
+                                <Descriptions.Item label={t('settings.updates.releaseNotes')}>
+                                  {latestManifest.notes.length ? (
+                                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                                      {latestManifest.notes.map((n: string, idx: number) => (
+                                        <li key={idx}>
+                                          <Typography.Text>{n}</Typography.Text>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  ) : (
+                                    <Typography.Text>-</Typography.Text>
+                                  )}
+                                </Descriptions.Item>
+                              </Descriptions>
+
+                              <Space wrap>
+                                <Button
+                                  type="primary"
+                                  onClick={() => void handleUpdateNow()}
+                                  disabled={!licenseActive || downloadingUpdate}
+                                  loading={downloadingUpdate}
+                                >
+                                  {downloadingUpdate
+                                    ? downloadPct == null
+                                      ? t('settings.updates.downloading')
+                                      : t('settings.updates.downloadingPct', { pct: downloadPct })
+                                    : t('settings.updates.updateNow')}
+                                </Button>
+                                {!nsisUrl ? (
+                                  <Typography.Text type="secondary">{t('settings.updates.missingInstallerUrl')}</Typography.Text>
+                                ) : null}
+                              </Space>
+                            </div>
+                          }
+                        />
+                      </div>
+                    ) : null}
                   </div>
                 ),
               },

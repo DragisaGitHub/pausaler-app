@@ -23,6 +23,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+tokio = { version = "1", features = ["fs", "io-util"] }
+futures-util = "0.3"
 printpdf = { version = "0.7", features = ["embedded_images"] }
 ttf-parser = "0.19"
 base64 = "0.22"

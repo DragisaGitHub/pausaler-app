@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
+use tauri::Emitter;
 use tauri::path::BaseDirectory;
 use std::{
     fs,
@@ -4125,6 +4126,102 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct UpdateDownloadProgress {
+    downloaded: u64,
+    total: Option<u64>,
+}
+
+fn resolve_updates_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    if let Ok(dir) = app.path().app_data_dir() {
+        return Ok(dir.join("updates"));
+    }
+    if let Ok(dir) = app.path().app_local_data_dir() {
+        return Ok(dir.join("updates"));
+    }
+    Ok(std::env::temp_dir().join("pausaler-app").join("updates"))
+}
+
+#[tauri::command]
+async fn download_update_installer(app: tauri::AppHandle, url: String) -> Result<String, String> {
+    let u = url.trim();
+    if u.is_empty() {
+        return Err("Missing download URL".to_string());
+    }
+
+    let dir = resolve_updates_dir(&app)?;
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create updates directory: {e}"))?;
+
+    let dest_path = dir.join("Paushaler-setup.exe");
+    if dest_path.exists() {
+        let _ = fs::remove_file(&dest_path);
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
+
+    let resp = client
+        .get(u)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to start download: {e}"))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("Download failed (HTTP {status})"));
+    }
+
+    let total = resp.content_length();
+    let mut downloaded: u64 = 0;
+
+    let mut file = tokio::fs::File::create(&dest_path)
+        .await
+        .map_err(|e| format!("Failed to create installer file: {e}"))?;
+
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk_res) = stream.next().await {
+        let chunk = chunk_res.map_err(|e| format!("Download error: {e}"))?;
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| format!("Failed to write installer file: {e}"))?;
+        downloaded = downloaded.saturating_add(chunk.len() as u64);
+        let _ = app.emit(
+            "update_download_progress",
+            UpdateDownloadProgress { downloaded, total },
+        );
+    }
+
+    file.flush()
+        .await
+        .map_err(|e| format!("Failed to finalize installer file: {e}"))?;
+
+    Ok(dest_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn run_installer_and_exit(app: tauri::AppHandle, installer_path: String) -> Result<bool, String> {
+    if !cfg!(target_os = "windows") {
+        return Err("Update installer is only supported on Windows.".to_string());
+    }
+
+    let p = PathBuf::from(installer_path);
+    if !p.exists() {
+        return Err("Installer file not found".to_string());
+    }
+
+    std::process::Command::new(&p)
+        .spawn()
+        .map_err(|e| format!("Failed to launch installer: {e}"))?;
+
+    app.exit(0);
+    Ok(true)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -4142,6 +4239,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             quit_app,
+            download_update_installer,
+            run_installer_and_exit,
             list_serbia_cities,
             export_invoice_pdf_to_downloads,
             export_invoices_csv,
