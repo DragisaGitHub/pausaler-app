@@ -1,8 +1,11 @@
 {
-  "version": "1.0.4",
+  "version": "1.0.5",
   "releasedAt": "2026-01-06T00:00:00Z",
   "notes": [
-    "No changes — manifest baseline for update checks."
+    "Added user documentation wizard for Gmail App Password creation.",
+    "Added separate accordion section with step-by-step guide for Yahoo SMTP setup.",
+    "Email Settings screen now contains clear Gmail and Yahoo SMTP configuration instructions for non-technical users.",
+    "SMTP password field supports auto-sanitize (removes all whitespace on paste/input)."
   ],
   "windows": {
     "nsis": "https://github.com/DragisaGitHub/pausaler-app/releases/latest/download/Paushaler-setup.exe",

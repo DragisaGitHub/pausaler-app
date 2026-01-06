@@ -63,14 +63,18 @@ export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
     },
     {
       key: '/settings',
-      icon: <SettingOutlined />,
+      icon: updateBadge.available ? (
+        <Badge dot offset={[10, 0]}>
+          <SettingOutlined />
+        </Badge>
+      ) : (
+        <SettingOutlined />
+      ),
       disabled: needsSetup,
       label: needsSetup ? (
         <span>{t('nav.settings')}</span>
       ) : (
-        <Badge dot={updateBadge.available} offset={[10, 0]}>
-          <Link to="/settings">{t('nav.settings')}</Link>
-        </Badge>
+        <Link to="/settings">{t('nav.settings')}</Link>
       ),
     },
     {

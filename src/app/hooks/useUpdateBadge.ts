@@ -18,6 +18,7 @@ export function useUpdateBadge(args?: { maxAgeMs?: number; timeoutMs?: number })
   useEffect(() => {
     let mounted = true;
     const timeoutMs = Math.max(1000, Number(args?.timeoutMs ?? 3000));
+    const maxAgeMs = Math.max(1000, Number(args?.maxAgeMs ?? 6 * 60 * 60 * 1000));
 
     const unsub = subscribeUpdateCheckCache(() => {
       const snap = getUpdateCheckCache();
@@ -30,7 +31,7 @@ export function useUpdateBadge(args?: { maxAgeMs?: number; timeoutMs?: number })
     void (async () => {
       try {
         const current = await getVersion();
-        await checkForUpdatesCached(String(current ?? ''), { timeoutMs, force: false });
+        await checkForUpdatesCached(String(current ?? ''), { timeoutMs, force: false, maxAgeMs });
       } catch {
         if (!mounted) return;
         setState({ available: false });
@@ -41,7 +42,7 @@ export function useUpdateBadge(args?: { maxAgeMs?: number; timeoutMs?: number })
       mounted = false;
       unsub();
     };
-  }, [args?.timeoutMs]);
+  }, [args?.timeoutMs, args?.maxAgeMs]);
 
   return state;
 }

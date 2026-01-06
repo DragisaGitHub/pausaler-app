@@ -123,10 +123,11 @@ export async function checkForUpdates(currentVersion: string, args?: { timeoutMs
 type UpdateCacheSnapshot = {
   result: UpdateCheckResult | null;
   error: string | null;
+  checkedAt: number | null;
 };
 
 let cachedPromise: Promise<UpdateCheckResult> | null = null;
-let cachedSnapshot: UpdateCacheSnapshot = { result: null, error: null };
+let cachedSnapshot: UpdateCacheSnapshot = { result: null, error: null, checkedAt: null };
 const cacheEvents = new EventTarget();
 
 function notifyCacheChanged() {
@@ -147,23 +148,29 @@ export function subscribeUpdateCheckCache(onChange: () => void): () => void {
 
 export async function checkForUpdatesCached(
   currentVersion: string,
-  args?: { timeoutMs?: number; force?: boolean }
+  args?: { timeoutMs?: number; force?: boolean; maxAgeMs?: number }
 ): Promise<UpdateCheckResult> {
   const force = args?.force === true;
+  const maxAgeMsRaw = args?.maxAgeMs;
+  const maxAgeMs = maxAgeMsRaw == null ? null : Math.max(1000, Number(maxAgeMsRaw));
   if (!force) {
-    if (cachedSnapshot.result) return cachedSnapshot.result;
+    if (cachedSnapshot.result) {
+      if (maxAgeMs == null) return cachedSnapshot.result;
+      const checkedAt = cachedSnapshot.checkedAt;
+      if (checkedAt != null && Date.now() - checkedAt <= maxAgeMs) return cachedSnapshot.result;
+    }
     if (cachedPromise) return cachedPromise;
   }
 
   cachedPromise = checkForUpdates(currentVersion, { timeoutMs: args?.timeoutMs })
     .then((res) => {
-      cachedSnapshot = { result: res, error: null };
+      cachedSnapshot = { result: res, error: null, checkedAt: Date.now() };
       notifyCacheChanged();
       return res;
     })
     .catch((e: any) => {
       const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
-      cachedSnapshot = { result: null, error: msg || 'Failed to check for updates' };
+      cachedSnapshot = { result: null, error: msg || 'Failed to check for updates', checkedAt: Date.now() };
       notifyCacheChanged();
       throw e;
     })

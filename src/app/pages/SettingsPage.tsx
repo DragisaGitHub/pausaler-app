@@ -13,6 +13,7 @@ import { isSmtpConfigured } from '../services/smtp';
 import { sendTestEmail } from '../services/smtpTest';
 import { getVersion } from '@tauri-apps/api/app';
 import { listen } from '@tauri-apps/api/event';
+import { open } from '@tauri-apps/plugin-shell';
 import { checkForUpdatesCached, downloadNsisInstaller, runInstallerAndExit, type UpdateManifest } from '../services/updateService.ts';
 
 function sanitizeSmtpPassword(value: string): string {
@@ -25,6 +26,7 @@ export function SettingsPage() {
   const { settings, loading, save } = useSettings();
   const [logoUrl, setLogoUrl] = useState('');
   const [testingEmail, setTestingEmail] = useState(false);
+  const [activeTabKey, setActiveTabKey] = useState<string>('company');
   const serbiaCities = useSerbiaCities();
 
   const [appVersion, setAppVersion] = useState<string>('');
@@ -167,6 +169,39 @@ export function SettingsPage() {
     }
   };
 
+  const handleOpenDownload = async () => {
+    const url = String(nsisUrl || latestManifest?.windows?.nsis || '').trim();
+    if (!url) {
+      message.error(t('settings.updates.errorMissingInstaller'));
+      return;
+    }
+    try {
+      await open(url);
+    } catch (e: any) {
+      const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
+      message.error(msg || t('settings.updates.errorDownloadOrLaunch'));
+    }
+  };
+
+  useEffect(() => {
+    if (activeTabKey !== 'aboutUpdates') return;
+
+    void (async () => {
+      try {
+        const current = appVersion || (await getVersion());
+        const res = await checkForUpdatesCached(String(current ?? ''), {
+          timeoutMs: 8000,
+          force: false,
+          maxAgeMs: 6 * 60 * 60 * 1000,
+        });
+        setLatestManifest(res.latest);
+        setUpdateAvailable(res.updateAvailable);
+        setNsisUrl(res.nsisUrl ? res.nsisUrl : '');
+      } catch {
+      }
+    })();
+  }, [activeTabKey, appVersion]);
+
   const applyDefaultTlsModeForPort = (port: number | null) => {
     if (!port) return;
     if (port === 465) form.setFieldValue('smtpTlsMode', 'implicit');
@@ -215,6 +250,7 @@ export function SettingsPage() {
         >
           <Tabs
             defaultActiveKey="company"
+            onChange={(k) => setActiveTabKey(String(k))}
             style={{ flex: 1 }}
             items={[
               {
@@ -851,6 +887,20 @@ export function SettingsPage() {
                       </Button>
                       <Typography.Text type="secondary">{t('settings.updates.checkHelp')}</Typography.Text>
                     </Space>
+
+                    {latestManifest && updateAvailable ? (
+                      <Alert
+                        type="info"
+                        showIcon
+                        message={`Dostupna je nova verzija: ${latestManifest.version}`}
+                        action={
+                          <Button type="link" onClick={() => void handleOpenDownload()}>
+                            Otvori preuzimanje
+                          </Button>
+                        }
+                        style={{ marginBottom: 12 }}
+                      />
+                    ) : null}
 
                     {updateError ? (
                       <Alert
