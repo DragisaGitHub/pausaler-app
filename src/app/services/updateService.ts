@@ -1,5 +1,3 @@
-import { invoke } from '@tauri-apps/api/core';
-
 export type UpdateManifest = {
   version: string;
   releasedAt: string;
@@ -179,16 +177,4 @@ export async function checkForUpdatesCached(
     });
 
   return cachedPromise;
-}
-
-export async function downloadNsisInstaller(url: string): Promise<string> {
-  const u = String(url ?? '').trim();
-  if (!u) throw new Error('Missing installer URL');
-  return invoke<string>('download_update_installer', { url: u });
-}
-
-export async function runInstallerAndExit(installerPath: string): Promise<boolean> {
-  const p = String(installerPath ?? '').trim();
-  if (!p) throw new Error('Missing installer path');
-  return invoke<boolean>('run_installer_and_exit', { installer_path: p });
 }

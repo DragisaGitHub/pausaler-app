@@ -12,9 +12,8 @@ import { isFeatureAllowed } from '../services/featureGate';
 import { isSmtpConfigured } from '../services/smtp';
 import { sendTestEmail } from '../services/smtpTest';
 import { getVersion } from '@tauri-apps/api/app';
-import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-shell';
-import { checkForUpdatesCached, downloadNsisInstaller, runInstallerAndExit, type UpdateManifest } from '../services/updateService.ts';
+import { checkForUpdatesCached, type UpdateManifest } from '../services/updateService.ts';
 
 function sanitizeSmtpPassword(value: string): string {
   return value.replace(/\s+/g, '');
@@ -36,7 +35,6 @@ export function SettingsPage() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [nsisUrl, setNsisUrl] = useState<string>('');
   const [downloadingUpdate, setDownloadingUpdate] = useState(false);
-  const [downloadPct, setDownloadPct] = useState<number | null>(null);
 
   const { status } = useLicenseGate();
   const canWriteSettings = isFeatureAllowed(status, 'SETTINGS_WRITE');
@@ -106,28 +104,7 @@ export function SettingsPage() {
   }, []);
 
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    void listen<{ downloaded: number; total?: number | null }>('update_download_progress', (event) => {
-      const downloaded = Number((event as any)?.payload?.downloaded ?? 0);
-      const total = (event as any)?.payload?.total;
-      const tt = total == null ? null : Number(total);
-      if (!Number.isFinite(downloaded) || !Number.isFinite(tt ?? 0) || !tt || tt <= 0) {
-        setDownloadPct(null);
-        return;
-      }
-      const pct = Math.max(0, Math.min(100, Math.round((downloaded / tt) * 100)));
-      setDownloadPct(pct);
-    })
-      .then((u) => {
-        unlisten = u;
-      })
-      .catch(() => {
-        unlisten = null;
-      });
-
-    return () => {
-      if (unlisten) unlisten();
-    };
+    return;
   }, []);
 
   const handleCheckUpdates = async () => {
@@ -151,35 +128,31 @@ export function SettingsPage() {
     }
   };
 
-  const handleUpdateNow = async () => {
-    if (downloadingUpdate) return;
-    if (!nsisUrl) {
-      message.error(t('settings.updates.errorMissingInstaller'));
-      return;
-    }
-    setDownloadingUpdate(true);
-    setDownloadPct(null);
-    try {
-      const installerPath = await downloadNsisInstaller(nsisUrl);
-      await runInstallerAndExit(installerPath);
-    } catch (e: any) {
-      const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
-      message.error(msg || t('settings.updates.errorDownloadOrLaunch'));
-      setDownloadingUpdate(false);
-    }
-  };
+  const GITHUB_RELEASES_LATEST_URL = 'https://github.com/DragisaGitHub/pausaler-app/releases/latest';
 
   const handleOpenDownload = async () => {
-    const url = String(nsisUrl || latestManifest?.windows?.nsis || '').trim();
-    if (!url) {
-      message.error(t('settings.updates.errorMissingInstaller'));
-      return;
-    }
+    const url = String(nsisUrl || latestManifest?.windows?.nsis || GITHUB_RELEASES_LATEST_URL).trim();
     try {
       await open(url);
     } catch (e: any) {
-      const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
-      message.error(msg || t('settings.updates.errorDownloadOrLaunch'));
+      try {
+        await navigator.clipboard.writeText(url);
+        message.success('Link je kopiran.');
+      } catch {
+        const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
+        message.error(msg || t('settings.updates.errorDownloadOrLaunch'));
+      }
+    }
+  };
+
+  const handleUpdateNow = async () => {
+    if (downloadingUpdate) return;
+    setDownloadingUpdate(true);
+    try {
+      await handleOpenDownload();
+      message.info('Preuzmite instalaciju, zatvorite aplikaciju i pokrenite installer.');
+    } finally {
+      setDownloadingUpdate(false);
     }
   };
 
@@ -960,11 +933,7 @@ export function SettingsPage() {
                                   disabled={!licenseActive || downloadingUpdate}
                                   loading={downloadingUpdate}
                                 >
-                                  {downloadingUpdate
-                                    ? downloadPct == null
-                                      ? t('settings.updates.downloading')
-                                      : t('settings.updates.downloadingPct', { pct: downloadPct })
-                                    : t('settings.updates.updateNow')}
+                                  {t('settings.updates.updateNow')}
                                 </Button>
                                 {!nsisUrl ? (
                                   <Typography.Text type="secondary">{t('settings.updates.missingInstallerUrl')}</Typography.Text>

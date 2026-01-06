@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Badge, Layout, Menu, theme } from 'antd';
-import { FileTextOutlined, UserOutlined, SettingOutlined, DashboardOutlined, BarChartOutlined, DollarOutlined, ExportOutlined, FileSearchOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
+import { Layout, Menu, theme } from 'antd';
+import { FileTextOutlined, UserOutlined, SettingOutlined, FlagOutlined, DashboardOutlined, BarChartOutlined, DollarOutlined, ExportOutlined, FileSearchOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import { Link, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { TitleBar } from '../components/TitleBar';
@@ -63,18 +63,20 @@ export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
     },
     {
       key: '/settings',
-      icon: updateBadge.available ? (
-        <Badge dot offset={[10, 0]}>
-          <SettingOutlined />
-        </Badge>
-      ) : (
-        <SettingOutlined />
-      ),
+      icon: <SettingOutlined />,
       disabled: needsSetup,
       label: needsSetup ? (
-        <span>{t('nav.settings')}</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          {t('nav.settings')}
+          {updateBadge.available ? <FlagOutlined style={{ color: '#ff4d4f' }} aria-label="Dostupno ažuriranje" /> : null}
+        </span>
       ) : (
-        <Link to="/settings">{t('nav.settings')}</Link>
+        <Link to="/settings">
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            {t('nav.settings')}
+            {updateBadge.available ? <FlagOutlined style={{ color: '#ff4d4f' }} aria-label="Dostupno ažuriranje" /> : null}
+          </span>
+        </Link>
       ),
     },
     {
