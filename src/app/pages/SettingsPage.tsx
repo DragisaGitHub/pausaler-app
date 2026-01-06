@@ -15,6 +15,10 @@ import { getVersion } from '@tauri-apps/api/app';
 import { listen } from '@tauri-apps/api/event';
 import { checkForUpdatesCached, downloadNsisInstaller, runInstallerAndExit, type UpdateManifest } from '../services/updateService.ts';
 
+function sanitizeSmtpPassword(value: string): string {
+  return value.replace(/\s+/g, '');
+}
+
 export function SettingsPage() {
   const { t } = useTranslation();
   const [form] = Form.useForm<Settings>();
@@ -54,6 +58,12 @@ export function SettingsPage() {
       return;
     }
     if (testingEmail) return;
+
+    const current = form.getFieldValue('smtpPassword');
+    const sanitized = sanitizeSmtpPassword(String(current ?? ''));
+    if (sanitized !== String(current ?? '')) {
+      form.setFieldValue('smtpPassword', sanitized);
+    }
 
     setTestingEmail(true);
     try {
@@ -169,7 +179,8 @@ export function SettingsPage() {
         message.error(t('license.lockedDescription'));
         return;
       }
-      await save({ ...values, logoUrl });
+      const sanitizedSmtpPassword = sanitizeSmtpPassword(String(values.smtpPassword ?? ''));
+      await save({ ...values, smtpPassword: sanitizedSmtpPassword, logoUrl });
       message.success(t('settings.saved'));
       await i18n.changeLanguage(normalizeLanguage(values.language));
     } catch {
@@ -427,7 +438,12 @@ export function SettingsPage() {
                         <Input placeholder={t('settings.smtpUserPlaceholder')} />
                       </Form.Item>
 
-                      <Form.Item label={t('settings.smtpPassword')} name="smtpPassword">
+                      <Form.Item
+                        label={t('settings.smtpPassword')}
+                        name="smtpPassword"
+                        extra="Razmaci u lozinci se automatski uklanjaju."
+                        getValueFromEvent={(e) => sanitizeSmtpPassword(String(e?.target?.value ?? ''))}
+                      >
                         <Input.Password placeholder={t('settings.smtpPasswordPlaceholder')} />
                       </Form.Item>
                     </div>
@@ -582,6 +598,117 @@ export function SettingsPage() {
                               </Typography.Title>
                               <Typography.Paragraph style={{ marginBottom: 0 }}>
                                 {t('settings.emailHelp.securityBody')}
+                              </Typography.Paragraph>
+                            </div>
+                          ),
+                        },
+                        {
+                          key: 'gmailExtraHelp',
+                          label: 'Gmail – dodatna pojašnjenja',
+                          children: (
+                            <div>
+                              <Divider style={{ margin: '12px 0' }} />
+
+                              <Typography.Title level={5} style={{ marginTop: 0 }}>
+                                Gmail – App Password wizard za korisnike bez tehničkog iskustva
+                              </Typography.Title>
+
+                              <Typography.Paragraph style={{ marginTop: 0, marginBottom: 8 }}>
+                                <Typography.Text strong>A) KORAK 1 – Provera preduslova</Typography.Text>
+                              </Typography.Paragraph>
+                              <ol style={{ marginTop: 0, marginBottom: 12 }}>
+                                <li>Korisnik mora imati lični gmail.com nalog.</li>
+                                <li>Mora biti uključena potvrda u dva koraka (2-Step Verification).</li>
+                                <li>Bez ove zaštite Gmail neće dozvoliti pravljenje lozinke za aplikaciju.</li>
+                              </ol>
+
+                              <Typography.Paragraph style={{ marginTop: 0, marginBottom: 8 }}>
+                                <Typography.Text strong>B) KORAK 2 – Uključivanje verifikacije u 2 koraka</Typography.Text>
+                              </Typography.Paragraph>
+                              <ol style={{ marginTop: 0, marginBottom: 12 }}>
+                                <li>Otvorite desktop browser (Chrome ili Edge).</li>
+                                <li>
+                                  Idite na:{' '}
+                                  <Typography.Link href="https://myaccount.google.com" target="_blank" rel="noreferrer">
+                                    https://myaccount.google.com
+                                  </Typography.Link>
+                                </li>
+                                <li>Levo izaberite: Bezbednost</li>
+                                <li>Otvorite: Verifikacija u 2 koraka</li>
+                                <li>Pratite Google korake da uključite 2FA putem telefona ili Google Prompt metode.</li>
+                              </ol>
+
+                              <Typography.Paragraph style={{ marginTop: 0, marginBottom: 8 }}>
+                                <Typography.Text strong>C) KORAK 3 – Kreiranje App Password</Typography.Text>
+                              </Typography.Paragraph>
+                              <ol style={{ marginTop: 0, marginBottom: 12 }}>
+                                <li>
+                                  Otvorite direktno u browseru:{' '}
+                                  <Typography.Link href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">
+                                    https://myaccount.google.com/apppasswords
+                                  </Typography.Link>
+                                </li>
+                                <li>Prijavite se na Gmail nalog ako Google to zatraži.</li>
+                                <li>U polju za naziv upišite: Pausaler</li>
+                                <li>Kliknite: Create / Kreiraj</li>
+                                <li>Google prikaže novu lozinku za aplikaciju.</li>
+                                <li>Kopirajte je i nalepite u polje “SMTP lozinka” u aplikaciji.</li>
+                              </ol>
+
+                              <Typography.Paragraph style={{ marginTop: 0, marginBottom: 8 }}>
+                                <Typography.Text strong>D) KORAK 4 – Ispravan copy/paste postupak</Typography.Text>
+                              </Typography.Paragraph>
+                              <ol style={{ marginTop: 0, marginBottom: 12 }}>
+                                <li>Nakon paste uključite “Prikaži lozinku” (ikona oka).</li>
+                                <li>Proverite da li unesena vrednost sadrži razmake.</li>
+                                <li>OBRIŠITE SVE RAZMAKE iz lozinke.</li>
+                                <li>Kliknite “Sačuvaj podešavanja”.</li>
+                                <li>Tek onda koristite dugme “Testiraj email podešavanja”.</li>
+                              </ol>
+
+                              <Typography.Paragraph style={{ marginTop: 0, marginBottom: 8 }}>
+                                <Typography.Text strong>E) SMTP podešavanja za Gmail (primer za unos)</Typography.Text>
+                              </Typography.Paragraph>
+                              <ul style={{ marginTop: 0, marginBottom: 12 }}>
+                                <li>SMTP host: smtp.gmail.com</li>
+                                <li>SMTP port: 587</li>
+                                <li>TLS režim: STARTTLS</li>
+                                <li>SMTP korisnik: puna Gmail adresa</li>
+                                <li>SMTP lozinka: App Password bez razmaka</li>
+                              </ul>
+
+                              <Descriptions size="small" bordered column={1} title="Polje | Vrednost">
+                                <Descriptions.Item label="SMTP host">smtp.gmail.com</Descriptions.Item>
+                                <Descriptions.Item label="SMTP port">587</Descriptions.Item>
+                                <Descriptions.Item label="TLS režim">STARTTLS</Descriptions.Item>
+                                <Descriptions.Item label="SMTP korisnik">puna Gmail adresa</Descriptions.Item>
+                                <Descriptions.Item label="SMTP lozinka">App Password bez razmaka</Descriptions.Item>
+                              </Descriptions>
+
+                              <Divider style={{ margin: '12px 0' }} />
+
+                              <Typography.Paragraph style={{ marginTop: 0, marginBottom: 8 }}>
+                                <Typography.Text strong>F) Troubleshooting</Typography.Text>
+                              </Typography.Paragraph>
+                              <ul style={{ marginTop: 0, marginBottom: 12 }}>
+                                <li>Ako opcija nije bila vidljiva, direktan URL uvek otvara ekran za lozinke.</li>
+                                <li>App Password mora biti vezan za isti Gmail nalog koji je username.</li>
+                                <li>Više testiranja sa pogrešnom vrednošću zaključava nalog (#AUTH005).</li>
+                                <li>Posle greške sačekati i pokušati ponovo samo nakon brisanja razmaka.</li>
+                              </ul>
+
+                              <Typography.Paragraph style={{ marginTop: 0, marginBottom: 8 }}>
+                                <Typography.Text strong>G) Bezbednost</Typography.Text>
+                              </Typography.Paragraph>
+                              <ul style={{ marginTop: 0, marginBottom: 0 }}>
+                                <li>Lozinka se čuva samo lokalno u aplikaciji.</li>
+                                <li>Ne šalje se na cloud niti na druge servere.</li>
+                                <li>Koristi se isključivo za Gmail SMTP vezu.</li>
+                              </ul>
+
+                              <Divider style={{ margin: '12px 0' }} />
+                              <Typography.Paragraph style={{ marginBottom: 0 }}>
+                                <Typography.Text type="secondary">Yahoo guide will be added later.</Typography.Text>
                               </Typography.Paragraph>
                             </div>
                           ),
