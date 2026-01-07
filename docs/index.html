@@ -387,6 +387,8 @@
                         </a>
                     </div>
 
+                    <p id="latest-version" class="micro" style="margin-top: 8px; display: none;"></p>
+
                     <p class="micro"><strong>Probni period:</strong> 7 dana. Nakon toga je potrebna licenca.</p>
                     <div class="compat" aria-label="Kompatibilnost">
                         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -660,11 +662,66 @@
 <script>
     const repo = "DragisaGitHub/pausaler-app";
     const stableExe = "Paushaler-setup.exe";
-    const downloadUrl = `https://github.com/${repo}/releases/latest/download/${stableExe}`;
+    const fallbackDownloadUrl = `https://github.com/${repo}/releases/latest/download/${stableExe}`;
     const links = document.querySelectorAll("a[data-download]");
     for (const link of links) {
-        link.href = downloadUrl;
+        link.href = fallbackDownloadUrl;
     }
+
+    const versionEl = document.getElementById("latest-version");
+    const hideVersion = () => {
+        if (!versionEl) return;
+        versionEl.textContent = "";
+        versionEl.style.display = "none";
+    };
+
+    const showVersion = (version) => {
+        if (!versionEl) return;
+        versionEl.textContent = `Najnovija verzija: ${version}`;
+        versionEl.style.display = "block";
+    };
+
+    const applyDownloadUrl = (url) => {
+        if (!url) return;
+        for (const link of links) {
+            link.href = url;
+        }
+    };
+
+    (async () => {
+        try {
+            // Served from GitHub Pages as /updates/latest.json on https://pausaler.rs/
+            const res = await fetch("/updates/latest.json", {
+                method: "GET",
+                cache: "no-store",
+                headers: { "Accept": "application/json" },
+            });
+
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const json = await res.json();
+            if (!json || typeof json !== "object") throw new Error("Invalid JSON");
+
+            const version = String(json.version ?? "").trim();
+            const date = String(json.date ?? "").trim();
+            const downloadUrl = String(json.downloadUrl ?? "").trim();
+
+            const hasRequiredFields =
+                !!version &&
+                !!date &&
+                /^\d{4}-\d{2}-\d{2}$/.test(date);
+
+            if (!hasRequiredFields) {
+                hideVersion();
+                return;
+            }
+
+            showVersion(version);
+            applyDownloadUrl(downloadUrl || fallbackDownloadUrl);
+        } catch {
+            hideVersion();
+            // Keep fallbackDownloadUrl already applied.
+        }
+    })();
 </script>
 </body>
 </html>

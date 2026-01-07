@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Layout, Menu, theme } from 'antd';
-import { FileTextOutlined, UserOutlined, SettingOutlined, FlagOutlined, DashboardOutlined, BarChartOutlined, DollarOutlined, ExportOutlined, FileSearchOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
+import { FileTextOutlined, UserOutlined, SettingOutlined, FlagOutlined, DashboardOutlined, BarChartOutlined, DollarOutlined, ExportOutlined, FileSearchOutlined, SafetyCertificateOutlined, GlobalOutlined } from '@ant-design/icons';
 import { Link, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { TitleBar } from '../components/TitleBar';
 import { LicenseGate } from '../components/LicenseGate';
 import { useUpdateBadge } from '../hooks/useUpdateBadge';
+import { open } from '@tauri-apps/plugin-shell';
 
 const { Sider, Content } = Layout;
 
@@ -85,6 +86,12 @@ export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
       disabled: false,
       label: <Link to="/license">{t('nav.license')}</Link>,
     },
+    {
+      key: '__website',
+      icon: <GlobalOutlined />,
+      disabled: false,
+      label: <span>Website</span>,
+    },
   ];
 
   return (
@@ -130,6 +137,11 @@ export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
             selectedKeys={[selectedKey]}
             items={menuItems}
             style={{ borderRight: 0 }}
+            onClick={(e) => {
+              if (e.key === '__website') {
+                void open('https://pausaler.rs/');
+              }
+            }}
           />
         </Sider>
 

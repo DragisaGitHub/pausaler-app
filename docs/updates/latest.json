@@ -1,11 +1,17 @@
 {
-  "version": "1.0.6",
-  "releasedAt": "2026-01-06T00:00:00Z",
+  "version": "1.0.7",
+  "date": "2026-01-07",
+  "downloadUrl": "https://github.com/DragisaGitHub/pausaler-app/releases/latest/download/Paushaler-setup.exe",
+  "releasedAt": "2026-01-07T00:00:00Z",
   "notes": [
-    "Added user documentation wizard for Gmail App Password creation.",
-    "Added separate accordion section with step-by-step guide for Yahoo SMTP setup.",
-    "Email Settings screen now contains clear Gmail and Yahoo SMTP configuration instructions for non-technical users.",
-    "SMTP password field supports auto-sanitize (removes all whitespace on paste/input)."
+    "Added a beginner-friendly in-app wizard explaining Gmail App Password generation (enable 2-Step Verification first, then App Passwords).",
+    "Improved Yahoo SMTP setup guide with step-by-step accordion for non-technical users.",
+    "Email Settings screen now provides copy/paste Gmail and Yahoo SMTP configuration blocks with common errors and troubleshooting.",
+    "Implemented automatic whitespace removal on paste/input in the SMTP password field to prevent authentication failures.",
+    "Added new Sider menu entry 'Website' that opens https://pausaler.rs/ in the user's default browser using Tauri Shell open().",
+    "Enhanced the public homepage (GitHub Pages) with dynamic display of the latest application version from latest.json, with Releases fallback.",
+    "Introduced SmartScreen guidance text after installation to clarify unknown publisher warnings.",
+    "Prepared support for alternative Windows packaging formats (NSIS and MSI) without changing existing licensing logic."
   ],
   "windows": {
     "nsis": "https://github.com/DragisaGitHub/pausaler-app/releases/latest/download/Paushaler-setup.exe",
