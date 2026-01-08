@@ -15,6 +15,7 @@ export const en = {
     actions: 'Actions',
     loading: 'Loading…',
     path: 'Path: {{path}}',
+    reset: 'Reset',
   },
   nav: {
     invoices: 'Invoices',
@@ -183,6 +184,8 @@ export const en = {
     addFirst: 'Add first client',
     empty: 'No clients',
     totalCount: 'Total {{count}} clients',
+    searchPlaceholder: 'Search by name, reg. number, VAT or email…',
+    cityFilterPlaceholder: 'Filter by city',
     name: 'Name',
     companyRegNumber: 'Registration number',
     vatId: 'VAT ID',

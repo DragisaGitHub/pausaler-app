@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Button,
   Table,
@@ -30,6 +30,80 @@ export function ClientsPage() {
   const serbiaCities = useSerbiaCities();
 
   const { clients, createClient, updateClient, deleteClient } = useClients();
+
+  // Search / filter / sort state
+  const [query, setQuery] = useState('');
+  const [cityFilter, setCityFilter] = useState<string | undefined>(undefined);
+  const [sorter, setSorter] = useState<{ field?: string; order?: 'ascend' | 'descend' }>({});
+
+  function normalizeSerbianLatin(input: string): string {
+    return String(input ?? '')
+      .toLowerCase()
+      .replace(/[čć]/g, 'c')
+      .replace(/š/g, 's')
+      .replace(/ž/g, 'z')
+      .replace(/đ/g, 'dj');
+  }
+
+  const cityFilterOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of clients) {
+      const city = String(c.city ?? '').trim();
+      if (city) set.add(city);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [clients]);
+
+  const visibleClients = useMemo(() => {
+    const q = normalizeSerbianLatin(query.trim());
+    let list = clients;
+
+    if (q) {
+      list = list.filter((c) => {
+        const fields = [
+          c.name,
+          c.pib,
+          c.email,
+          c.address,
+          c.city,
+          c.postalCode,
+          c.registrationNumber,
+        ];
+        const hay = normalizeSerbianLatin(fields.map((v) => String(v ?? '')).join(' \u0000 '));
+        return hay.includes(q);
+      });
+    }
+
+    if (cityFilter) {
+      list = list.filter((c) => String(c.city ?? '') === cityFilter);
+    }
+
+    // Sorting
+    const withSort = [...list];
+    if (sorter.field && sorter.order) {
+      const dir = sorter.order === 'ascend' ? 1 : -1;
+      const field = sorter.field as keyof Client;
+      withSort.sort((a: Client, b: Client) => {
+        let av: any = a[field];
+        let bv: any = b[field];
+        if (field === 'createdAt') {
+          const ad = new Date(String(a.createdAt)).getTime();
+          const bd = new Date(String(b.createdAt)).getTime();
+          return (ad - bd) * dir;
+        }
+        av = String(av ?? '').toLowerCase();
+        bv = String(bv ?? '').toLowerCase();
+        if (av < bv) return -1 * dir;
+        if (av > bv) return 1 * dir;
+        return 0;
+      });
+    } else {
+      // Default: newest first
+      withSort.sort((a, b) => new Date(String(b.createdAt)).getTime() - new Date(String(a.createdAt)).getTime());
+    }
+
+    return withSort;
+  }, [clients, query, cityFilter, sorter]);
 
   const handleAdd = () => {
     if (!canWriteClients) {
@@ -92,9 +166,7 @@ export function ClientsPage() {
     form.resetFields();
   };
 
-  const sortedClients = [...clients].sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
+  const sortedClients = visibleClients; // kept name for minimal downstream changes
 
   const columns = [
     {
@@ -102,12 +174,16 @@ export function ClientsPage() {
       dataIndex: 'name',
       key: 'name',
       render: (text: string) => <strong>{text}</strong>,
+      sorter: true,
+      sortOrder: sorter.field === 'name' ? sorter.order : undefined,
     },
     {
       title: t('clients.vatId'),
       dataIndex: 'pib',
       key: 'pib',
       width: 150,
+      sorter: true,
+      sortOrder: sorter.field === 'pib' ? sorter.order : undefined,
     },
     {
       title: t('clients.address'),
@@ -127,6 +203,8 @@ export function ClientsPage() {
       dataIndex: 'email',
       key: 'email',
       width: 250,
+      sorter: true,
+      sortOrder: sorter.field === 'email' ? sorter.order : undefined,
     },
     {
       title: t('common.actions'),
@@ -180,6 +258,44 @@ export function ClientsPage() {
             {t('clients.add')}
           </Button>
         </div>
+        {/* Filters toolbar (above table) */}
+        <div
+          style={{
+            display: 'flex',
+            gap: 16,
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            marginBottom: 16,
+            padding: 12,
+            border: '1px solid rgba(0,0,0,0.06)',
+            borderRadius: 12,
+            background: '#ffffff',
+          }}
+        >
+          <Input.Search
+            allowClear
+            size="middle"
+            placeholder={t('clients.searchPlaceholder')}
+            style={{ minWidth: 320, maxWidth: 420, flex: '1 1 320px' }}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onSearch={(v) => setQuery(v)}
+          />
+          <Select
+            allowClear
+            size="middle"
+            placeholder={t('clients.cityFilterPlaceholder')}
+            style={{ minWidth: 200, width: 220 }}
+            value={cityFilter}
+            onChange={(v) => setCityFilter(v)}
+            options={cityFilterOptions.map((c) => ({ label: c, value: c }))}
+          />
+          <div style={{ marginLeft: 'auto' }}>
+            <Button size="middle" onClick={() => { setQuery(''); setCityFilter(undefined); }}>
+              {t('common.reset')}
+            </Button>
+          </div>
+        </div>
 
         <Table
             columns={columns}
@@ -189,6 +305,14 @@ export function ClientsPage() {
               pageSize: 10,
               showSizeChanger: true,
               showTotal: (total) => t('clients.totalCount', { count: total }),
+            }}
+            onChange={(_, __, sorterArg) => {
+              const s = Array.isArray(sorterArg) ? sorterArg[0] : sorterArg;
+              if (s && s.field && s.order) {
+                setSorter({ field: String(s.field), order: s.order as any });
+              } else {
+                setSorter({});
+              }
             }}
             locale={{
               emptyText: (
