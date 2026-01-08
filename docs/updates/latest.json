@@ -1,17 +1,17 @@
 {
-  "version": "1.0.7",
-  "date": "2026-01-07",
+  "version": "1.0.8",
+  "date": "2026-01-08",
   "downloadUrl": "https://github.com/DragisaGitHub/pausaler-app/releases/latest/download/Paushaler-setup.exe",
-  "releasedAt": "2026-01-07T00:00:00Z",
+  "releasedAt": "2026-01-08T00:00:00Z",
   "notes": [
-    "Added a beginner-friendly in-app wizard explaining Gmail App Password generation (enable 2-Step Verification first, then App Passwords).",
-    "Improved Yahoo SMTP setup guide with step-by-step accordion for non-technical users.",
-    "Email Settings screen now provides copy/paste Gmail and Yahoo SMTP configuration blocks with common errors and troubleshooting.",
-    "Implemented automatic whitespace removal on paste/input in the SMTP password field to prevent authentication failures.",
-    "Added new Sider menu entry 'Website' that opens https://pausaler.rs/ in the user's default browser using Tauri Shell open().",
-    "Enhanced the public homepage (GitHub Pages) with dynamic display of the latest application version from latest.json, with Releases fallback.",
-    "Introduced SmartScreen guidance text after installation to clarify unknown publisher warnings.",
-    "Prepared support for alternative Windows packaging formats (NSIS and MSI) without changing existing licensing logic."
+    "Added full client search with instant filtering by name, PIB, email, address, city, postal code, and registration number (diacritics-insensitive).",
+    "Introduced client list sorting by name, PIB, and email with clean SaaS-style table controls.",
+    "Added city-based client filter with reset option for faster navigation in large client lists.",
+    "Redesigned Clients page toolbar: search and filters are now placed above the table with a clean, consistent layout.",
+    "Fixed client city selection and persistence issues when creating and editing clients (city and postal code now always stay in sync).",
+    "Improved city Select behavior for existing clients so the saved city is immediately visible when editing.",
+    "Ensured consistent Serbian and English translations for all new search, filter, and reset UI elements.",
+    "General UI polish and stability improvements in the Clients module."
   ],
   "windows": {
     "nsis": "https://github.com/DragisaGitHub/pausaler-app/releases/latest/download/Paushaler-setup.exe",
