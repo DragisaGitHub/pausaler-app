@@ -146,7 +146,7 @@ export async function getLicenseStatus(): Promise<LicenseStatus> {
 
 export async function isLicenseActive(): Promise<boolean> {
   const s = await getLicenseStatus();
-  return s.isLicensed === true;
+  return s.isLicensed;
 }
 
 export function getStoredLicense(): string | null {

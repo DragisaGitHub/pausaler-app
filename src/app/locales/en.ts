@@ -145,6 +145,7 @@ export const en = {
     statusTitle: 'Status',
     statusLicensed: 'Licensed',
     statusLicensedUntil: 'Licensed until {{until}}',
+    typeLifetime: 'No-limit / Lifetime',
     statusTrial: 'Trial active ({{days}} days remaining)',
     statusTrialUnknown: 'Trial active',
     statusViewOnly: 'View-only mode (license required for editing/export)',

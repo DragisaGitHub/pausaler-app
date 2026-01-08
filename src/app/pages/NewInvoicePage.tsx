@@ -710,7 +710,7 @@ export function NewInvoicePage() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
             <Form.Item
               label={t('clients.city')}
-              name="city"
+              name="cityObj"
               rules={[{ required: true, message: t('clients.cityReq') }]}
             >
               <Select<string, SerbiaCitySelectOption>
@@ -720,16 +720,23 @@ export function NewInvoicePage() {
                 loading={serbiaCities.loading}
                 options={serbiaCities.options}
                 filterOption={false}
+                searchValue={serbiaCities.searchValue}
+                onDropdownVisibleChange={(open) => {
+                  if (open) {
+                    const currentCity = String(clientForm.getFieldValue('city') ?? '');
+                    serbiaCities.initSearchFromText(currentCity);
+                  }
+                }}
                 onSearch={serbiaCities.search}
                 onClear={() => {
+                  clientForm.setFieldValue('city', '');
                   clientForm.setFieldValue('postalCode', '');
+                  serbiaCities.search('');
                 }}
                 onSelect={(_, option) => {
-                  const opt = Array.isArray(option) ? option[0] : option;
-                  const postalCode = String(opt?.postalCode ?? '').trim();
-                  if (postalCode) {
-                    clientForm.setFieldValue('postalCode', postalCode);
-                  }
+                  const opt = Array.isArray(option) ? (option[0] as SerbiaCitySelectOption) : (option as SerbiaCitySelectOption);
+                  clientForm.setFieldValue('city', opt.city);
+                  clientForm.setFieldValue('postalCode', opt.postalCode);
                 }}
               />
             </Form.Item>

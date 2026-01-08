@@ -15,7 +15,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { Client } from '../types';
 import {useClients} from "../hooks/useClients.ts";
 import { useTranslation } from 'react-i18next';
-import { useSerbiaCities } from '../hooks/useSerbiaCities';
+import { useSerbiaCities, type SerbiaCitySelectOption } from '../hooks/useSerbiaCities';
 import { useLicenseGate } from '../components/LicenseGate';
 import { isFeatureAllowed } from '../services/featureGate';
 
@@ -38,6 +38,9 @@ export function ClientsPage() {
     }
     setEditingClient(null);
     form.resetFields();
+    form.setFieldValue('cityObj', undefined);
+    form.setFieldValue('city', '');
+    form.setFieldValue('postalCode', '');
     setIsModalVisible(true);
   };
 
@@ -48,6 +51,8 @@ export function ClientsPage() {
     }
     setEditingClient(client);
     form.setFieldsValue(client);
+    // Prefill Select (value = postalCode) so label shows immediately
+    form.setFieldValue('cityObj', client.postalCode);
     setIsModalVisible(true);
   };
 
@@ -64,20 +69,22 @@ export function ClientsPage() {
     }
   };
 
-  const handleSubmit = async (values: Omit<Client, 'id' | 'createdAt'>) => {
+  const handleSubmit = async (values: Omit<Client, 'id' | 'createdAt'> & { cityObj?: string }) => {
     if (!canWriteClients) {
       message.error(t('license.lockedDescription'));
       return;
     }
+    // Ensure we don't persist the helper field `cityObj`
+    const { cityObj: _ignore, ...payload } = values as any;
     if (editingClient) {
-      const updated = await updateClient(editingClient.id, values);
+      const updated = await updateClient(editingClient.id, payload);
       if (updated) {
         message.success(t('clients.updated'));
       } else {
         message.error(t('clients.notFound'));
       }
     } else {
-      await createClient(values);
+      await createClient(payload as any);
       message.success(t('clients.created'));
     }
 
@@ -208,6 +215,10 @@ export function ClientsPage() {
             width={600}
         >
           <Form form={form} layout="vertical" onFinish={handleSubmit} size="large" disabled={!canWriteClients}>
+            {/* Hidden field to register `city` so it persists */}
+            <Form.Item name="city" hidden>
+              <Input />
+            </Form.Item>
             <Form.Item
                 label={t('clients.name')}
                 name="name"
@@ -243,25 +254,34 @@ export function ClientsPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               <Form.Item
                 label={t('clients.city')}
-                name="city"
+                name="cityObj"
                 rules={[{ required: true, message: t('clients.cityReq') }]}
               >
-                <Select
+                <Select<string, SerbiaCitySelectOption>
                   showSearch
                   allowClear
                   placeholder={t('clients.cityPlaceholder')}
                   loading={serbiaCities.loading}
                   options={serbiaCities.options}
                   filterOption={false}
+                  searchValue={serbiaCities.searchValue}
+                  onDropdownVisibleChange={(open) => {
+                    if (open) {
+                      const currentCity = String(form.getFieldValue('city') ?? '');
+                      serbiaCities.initSearchFromText(currentCity);
+                    }
+                  }}
                   onSearch={serbiaCities.search}
                   onClear={() => {
+                      form.setFieldValue('cityObj', undefined);
+                    form.setFieldValue('city', '');
                     form.setFieldValue('postalCode', '');
+                    serbiaCities.search('');
                   }}
                   onSelect={(_, option) => {
-                    const postalCode = String((option as any)?.postalCode ?? '').trim();
-                    if (postalCode) {
-                      form.setFieldValue('postalCode', postalCode);
-                    }
+                    const opt = Array.isArray(option) ? (option[0] as SerbiaCitySelectOption) : (option as SerbiaCitySelectOption);
+                    form.setFieldValue('city', opt.city);
+                    form.setFieldValue('postalCode', opt.postalCode);
                   }}
                 />
               </Form.Item>

@@ -155,7 +155,7 @@ export function SetupCompanyPage({ onCompleted }: SetupCompanyPageProps) {
 
             <Form.Item
               label={t('settings.companyCity')}
-              name="companyCity"
+              name="companyCityObj"
               rules={[{ required: true, message: t('settings.companyCityReq') }]}
             >
               <Select<string, SerbiaCitySelectOption>
@@ -165,16 +165,23 @@ export function SetupCompanyPage({ onCompleted }: SetupCompanyPageProps) {
                 loading={serbiaCities.loading}
                 options={serbiaCities.options}
                 filterOption={false}
+                searchValue={serbiaCities.searchValue}
+                onDropdownVisibleChange={(open) => {
+                  if (open) {
+                    const currentCity = String(form.getFieldValue('companyCity') ?? '');
+                    serbiaCities.initSearchFromText(currentCity);
+                  }
+                }}
                 onSearch={serbiaCities.search}
                 onClear={() => {
+                  form.setFieldValue('companyCity', '');
                   form.setFieldValue('companyPostalCode', '');
+                  serbiaCities.search('');
                 }}
                 onSelect={(_, option) => {
-                  const opt = Array.isArray(option) ? option[0] : option;
-                  const postalCode = String(opt?.postalCode ?? '').trim();
-                  if (postalCode) {
-                    form.setFieldValue('companyPostalCode', postalCode);
-                  }
+                  const opt = Array.isArray(option) ? (option[0] as SerbiaCitySelectOption) : (option as SerbiaCitySelectOption);
+                  form.setFieldValue('companyCity', opt.city);
+                  form.setFieldValue('companyPostalCode', opt.postalCode);
                 }}
               />
             </Form.Item>

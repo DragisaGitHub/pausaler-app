@@ -150,6 +150,7 @@ export const sr = {
     statusTitle: 'Status',
     statusLicensed: 'Aktivirana licenca',
     statusLicensedUntil: 'Licenca važi do {{until}}',
+    typeLifetime: 'Neograničena / Doživotna',
     statusTrial: 'Probni period (preostalo {{days}} dana)',
     statusTrialUnknown: 'Probni period je aktivan',
       statusViewOnly: 'Režim pregleda (licenca je potrebna za izmenu/izvoz)',

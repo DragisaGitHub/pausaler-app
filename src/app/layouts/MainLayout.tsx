@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Layout, Menu, theme } from 'antd';
+import { Alert, Layout, Menu, theme } from 'antd';
 import { FileTextOutlined, UserOutlined, SettingOutlined, FlagOutlined, DashboardOutlined, BarChartOutlined, DollarOutlined, ExportOutlined, FileSearchOutlined, SafetyCertificateOutlined, GlobalOutlined } from '@ant-design/icons';
 import { Link, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -13,6 +13,7 @@ const { Sider, Content } = Layout;
 export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
   const { t } = useTranslation();
   const [collapsed, setCollapsed] = useState(false);
+  const [dismissedUpdateBanner, setDismissedUpdateBanner] = useState(false);
   const location = useLocation();
   const updateBadge = useUpdateBadge();
   const {
@@ -105,6 +106,29 @@ export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
       }}
     >
       <TitleBar />
+
+      {updateBadge.available && !dismissedUpdateBanner ? (
+        <Alert
+          type="warning"
+          showIcon
+          banner
+          closable
+          onClose={() => setDismissedUpdateBanner(true)}
+          message={
+            <span>
+              <strong>Dostupno je ažuriranje</strong>
+              {updateBadge.latestVersion ? (
+                <span>
+                  {' '}
+                  (<strong>{updateBadge.latestVersion}</strong>). Otvori Podešavanja → O aplikaciji / Ažuriranja.
+                </span>
+              ) : (
+                <span>. Otvori Podešavanja → O aplikaciji / Ažuriranja.</span>
+              )}
+            </span>
+          }
+        />
+      ) : null}
 
       <Layout style={{ flex: 1, minHeight: 0 }}>
         <Sider

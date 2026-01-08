@@ -8,6 +8,7 @@ import { getDevForcedLockInfo, setDevForcedLockLevelPersisted } from '../service
 import type { LockLevel } from '../types/license';
 import { HARD_BLOCKED, VIEW_ONLY_ALLOWED, VIEW_ONLY_BLOCKED } from '../services/lockAudit';
 import { ensureTrialHydrated, getTrialInfo } from '../services/trialService';
+import dayjs from 'dayjs';
 
 function msToDays(ms: number): number {
   return Math.max(0, Math.ceil(ms / (24 * 60 * 60 * 1000)));
@@ -47,9 +48,13 @@ export function LicensePage() {
       setStatus(s);
 
       if (s.isLicensed) {
-        setStatusText(
-          s.validUntil ? t('license.statusLicensedUntil', { until: s.validUntil }) : t('license.statusLicensed')
-        );
+        if (s.validUntil) {
+          const d = dayjs(s.validUntil);
+          const until = d.isValid() ? d.format('YYYY-MM-DD') : s.validUntil;
+          setStatusText(t('license.statusLicensedUntil', { until }));
+        } else {
+          setStatusText(`${t('license.statusLicensed')} • ${t('license.typeLifetime')}`);
+        }
       } else if (s.isTrialActive) {
         if (trialRemainingDays != null) {
           setStatusText(t('license.statusTrial', { days: trialRemainingDays }));
@@ -89,6 +94,21 @@ export function LicensePage() {
   useEffect(() => {
     void refresh();
   }, []);
+
+  const yearlyDaysLeft = useMemo(() => {
+    if (!status?.isLicensed || !status.validUntil) return null;
+    const d = dayjs(status.validUntil);
+    if (!d.isValid()) return null;
+    return msToDays(d.valueOf() - Date.now());
+  }, [status?.isLicensed, status?.validUntil]);
+
+  const showActivationUI = useMemo(() => {
+    if (!status) return true;
+    if (!status.isLicensed) return true;
+    if (!status.validUntil) return false;
+    if (yearlyDaysLeft == null) return true;
+    return yearlyDaysLeft <= 7;
+  }, [status, yearlyDaysLeft]);
 
   const doGenerateActivationCode = async () => {
     if (generating) return;
@@ -156,75 +176,79 @@ export function LicensePage() {
         style={{ marginBottom: 16 }}
       />
 
-      <Card title={t('license.activationCodeTitle')} style={{ marginBottom: 16 }}>
-        <Space direction="vertical" style={{ width: '100%' }} size="middle">
-          <Typography.Paragraph style={{ marginBottom: 0 }}>
-            {t('license.activationCodeHelp')}
-          </Typography.Paragraph>
-
-          <Space>
-            <Button icon={<KeyOutlined />} onClick={() => void doGenerateActivationCode()} loading={generating}>
-              {t('license.generateActivationCode')}
-            </Button>
-            <Button icon={<CopyOutlined />} onClick={() => void doCopy()} disabled={!activationCode}>
-              {t('license.copy')}
-            </Button>
-          </Space>
-
-          <Input.TextArea
-            value={activationCode}
-            readOnly
-            autoSize={{ minRows: 3, maxRows: 6 }}
-            placeholder={t('license.activationCodePlaceholder')}
-          />
-        </Space>
-      </Card>
-
-      <Card title={t('license.enterLicenseTitle')}>
-        <Space direction="vertical" style={{ width: '100%' }} size="middle">
-          <Typography.Paragraph style={{ marginBottom: 0 }}>
-            {t('license.enterLicenseHelp')}
-          </Typography.Paragraph>
-
-          <Form layout="vertical">
-            <Form.Item label={t('license.licenseStringLabel')}>
-              <Input.TextArea
-                value={licenseInput}
-                onChange={(e) => setLicenseInput(e.target.value)}
-                autoSize={{ minRows: 3, maxRows: 8 }}
-                placeholder={t('license.licenseStringPlaceholder')}
-              />
-            </Form.Item>
+      {showActivationUI ? (
+        <Card title={t('license.activationCodeTitle')} style={{ marginBottom: 16 }}>
+          <Space direction="vertical" style={{ width: '100%' }} size="middle">
+            <Typography.Paragraph style={{ marginBottom: 0 }}>
+              {t('license.activationCodeHelp')}
+            </Typography.Paragraph>
 
             <Space>
-              <Button
-                type="primary"
-                icon={<SafetyCertificateOutlined />}
-                onClick={() => void doActivate()}
-                loading={activating}
-                disabled={!licenseInput.trim()}
-              >
-                {t('license.activate')}
+              <Button icon={<KeyOutlined />} onClick={() => void doGenerateActivationCode()} loading={generating}>
+                {t('license.generateActivationCode')}
+              </Button>
+              <Button icon={<CopyOutlined />} onClick={() => void doCopy()} disabled={!activationCode}>
+                {t('license.copy')}
               </Button>
             </Space>
-          </Form>
 
-          <Descriptions size="small" column={1} bordered>
-            <Descriptions.Item label={t('license.trialLabel')}>
-              {trialInfo
-                ? trialInfo.status === 'ACTIVE'
-                  ? t('license.trialActive')
-                  : t('license.trialExpired')
-                : t('license.trialUnknown')}
-            </Descriptions.Item>
-            {trialInfo?.trialEndsAt ? (
-              <Descriptions.Item label={t('license.trialEndsAt')}>
-                {trialInfo.trialEndsAt}
+            <Input.TextArea
+              value={activationCode}
+              readOnly
+              autoSize={{ minRows: 3, maxRows: 6 }}
+              placeholder={t('license.activationCodePlaceholder')}
+            />
+          </Space>
+        </Card>
+      ) : null}
+
+      {showActivationUI ? (
+        <Card title={t('license.enterLicenseTitle')}>
+          <Space direction="vertical" style={{ width: '100%' }} size="middle">
+            <Typography.Paragraph style={{ marginBottom: 0 }}>
+              {t('license.enterLicenseHelp')}
+            </Typography.Paragraph>
+
+            <Form layout="vertical">
+              <Form.Item label={t('license.licenseStringLabel')}>
+                <Input.TextArea
+                  value={licenseInput}
+                  onChange={(e) => setLicenseInput(e.target.value)}
+                  autoSize={{ minRows: 3, maxRows: 8 }}
+                  placeholder={t('license.licenseStringPlaceholder')}
+                />
+              </Form.Item>
+
+              <Space>
+                <Button
+                  type="primary"
+                  icon={<SafetyCertificateOutlined />}
+                  onClick={() => void doActivate()}
+                  loading={activating}
+                  disabled={!licenseInput.trim()}
+                >
+                  {t('license.activate')}
+                </Button>
+              </Space>
+            </Form>
+
+            <Descriptions size="small" column={1} bordered>
+              <Descriptions.Item label={t('license.trialLabel')}>
+                {trialInfo
+                  ? trialInfo.status === 'ACTIVE'
+                    ? t('license.trialActive')
+                    : t('license.trialExpired')
+                  : t('license.trialUnknown')}
               </Descriptions.Item>
-            ) : null}
-          </Descriptions>
-        </Space>
-      </Card>
+              {trialInfo?.trialEndsAt ? (
+                <Descriptions.Item label={t('license.trialEndsAt')}>
+                  {trialInfo.trialEndsAt}
+                </Descriptions.Item>
+              ) : null}
+            </Descriptions>
+          </Space>
+        </Card>
+      ) : null}
 
       {import.meta.env.DEV ? (
         <Card title="Dev Tools" style={{ marginTop: 16 }}>
