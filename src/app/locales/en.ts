@@ -296,6 +296,8 @@ export const en = {
       intro: 'These settings allow the app to send invoices by email automatically.',
       notConfiguredWarning: 'Email sending is not active — invoices can still be generated as PDF.',
       viewOnlyNote: 'Email sending is available only in the licensed version.',
+      passwordAlreadySaved: 'SMTP password is saved.',
+      replacePassword: 'Replace password',
 
       providersTitle: 'Recommended providers (ready-to-use examples)',
       provider: {

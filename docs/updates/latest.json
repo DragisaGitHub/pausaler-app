@@ -9,12 +9,14 @@
     "• VAŽNO (Windows): Ako ažurirate aplikaciju sa starije verzije, potrebno je prvo da deinstalirate prethodnu verziju, a zatim instalirate najnoviju. Deinstalacija NE briše vaše lokalne podatke niti podešavanja.",
     "• Napomena: Zbog Windows keširanja ikonica, nova ikonica se možda neće odmah pojaviti na Desktopu.",
     "• Ako se nova ikonica ne prikaže odmah, biće automatski osvežena nakon prvog restarta računara.",
+    "• Preporuka: Nakon restarta, proverite slanje email-a klikom na dugme „Testiraj email podešavanja“ u Email podešavanjima.",
 
     "EN:",
     "• New application icon (Pausaler logo).",
     "• IMPORTANT (Windows): If you are upgrading from an older version, please uninstall the previous version first and then install the latest version. Uninstalling does NOT remove your local data or settings.",
     "• Note: Due to Windows icon caching, the new application icon may not immediately appear on the Desktop.",
-    "• If the new icon does not appear right away, it will automatically refresh after restarting your computer."
+    "• If the new icon does not appear right away, it will automatically refresh after restarting your computer.",
+    "• Recommendation: After restarting, verify email sending by clicking the “Test email settings” button in Email Settings."
   ],
   "windows": {
     "nsis": "https://github.com/DragisaGitHub/pausaler-app/releases/latest/download/Paushaler-setup.exe",

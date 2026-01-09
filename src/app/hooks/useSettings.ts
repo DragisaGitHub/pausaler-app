@@ -35,7 +35,16 @@ export function useSettings(): UseSettingsResult {
         const storage = getStorage();
         setLoading(true);
         try {
-            const updated = await storage.updateSettings(next);
+            // Prepare a partial patch that does not overwrite smtpPassword when blank
+            const patch: Partial<Settings> = { ...next };
+            const pwd = String(next.smtpPassword ?? '').trim();
+            if (!pwd) {
+                delete (patch as any).smtpPassword;
+            } else {
+                patch.smtpPassword = pwd;
+            }
+
+            const updated = await storage.updateSettings(patch);
             setSettings(updated);
         } finally {
             setLoading(false);

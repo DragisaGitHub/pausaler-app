@@ -301,6 +301,8 @@ export const sr = {
       intro: 'Ova podešavanja omogućavaju da aplikacija automatski šalje fakture email-om.',
       notConfiguredWarning: 'Email slanje nije aktivno – fakture se i dalje mogu generisati kao PDF.',
       viewOnlyNote: 'Email slanje je dostupno samo u licenciranoj verziji.',
+      passwordAlreadySaved: 'SMTP lozinka je sačuvana.',
+      replacePassword: 'Zameni lozinku',
 
       providersTitle: 'Preporučeni provajderi (spremni primeri)',
       provider: {

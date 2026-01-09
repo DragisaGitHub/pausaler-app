@@ -2978,7 +2978,9 @@ async fn update_settings(state: tauri::State<'_, DbState>, patch: SettingsPatch)
                 current.smtp_user = v;
             }
             if let Some(v) = patch.smtp_password {
-                current.smtp_password = v;
+                if !v.trim().is_empty() {
+                    current.smtp_password = v;
+                }
             }
             if let Some(v) = patch.smtp_from {
                 current.smtp_from = v;

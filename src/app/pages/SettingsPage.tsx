@@ -27,6 +27,9 @@ export function SettingsPage() {
   const [testingEmail, setTestingEmail] = useState(false);
   const [activeTabKey, setActiveTabKey] = useState<string>('company');
   const serbiaCities = useSerbiaCities();
+  // SMTP password UX state
+  const [smtpPasswordSaved, setSmtpPasswordSaved] = useState(false);
+  const [smtpEditMode, setSmtpEditMode] = useState(false);
 
   const [appVersion, setAppVersion] = useState<string>('');
   const [checkingUpdates, setCheckingUpdates] = useState(false);
@@ -85,6 +88,11 @@ export function SettingsPage() {
     }
     form.setFieldsValue(next);
     setLogoUrl(settings.logoUrl || '');
+    // Derive whether password exists; do not prefill password field for security
+    const hasPwd = !!String(settings.smtpPassword ?? '').trim();
+    setSmtpPasswordSaved(hasPwd);
+    setSmtpEditMode(false);
+    form.setFieldValue('smtpPassword', '');
     // Initialize derived Select field with postal code when available
     const pc = String(settings.companyPostalCode ?? '').trim();
     if (pc) {
@@ -462,10 +470,33 @@ export function SettingsPage() {
                       <Form.Item
                         label={t('settings.smtpPassword')}
                         name="smtpPassword"
-                        extra="Razmaci u lozinci se automatski uklanjaju."
+                        extra={
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <span>Razmaci u lozinci se automatski uklanjaju.</span>
+                            {smtpPasswordSaved && !smtpEditMode ? (
+                              <span style={{ color: '#52c41a' }}>{t('settings.emailHelp.passwordAlreadySaved') || 'SMTP lozinka je sačuvana.'}</span>
+                            ) : null}
+                          </div>
+                        }
                         getValueFromEvent={(e) => sanitizeSmtpPassword(String(e?.target?.value ?? ''))}
                       >
-                        <Input.Password placeholder={t('settings.smtpPasswordPlaceholder')} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Input.Password
+                            placeholder={t('settings.smtpPasswordPlaceholder')}
+                            disabled={smtpPasswordSaved && !smtpEditMode}
+                          />
+                          {smtpPasswordSaved && !smtpEditMode ? (
+                            <Button
+                              size="small"
+                              onClick={() => {
+                                setSmtpEditMode(true);
+                                form.setFieldValue('smtpPassword', '');
+                              }}
+                            >
+                              {t('settings.emailHelp.replacePassword') || 'Zameni lozinku'}
+                            </Button>
+                          ) : null}
+                        </div>
                       </Form.Item>
                     </div>
 
