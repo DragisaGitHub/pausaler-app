@@ -3711,6 +3711,15 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendLicenseRequestEmailInput {
+    pub to: String,
+    pub subject: String,
+    #[serde(default)]
+    pub body: Option<String>,
+}
+
 #[tauri::command]
 async fn send_invoice_email(
     state: tauri::State<'_, DbState>,
@@ -3791,16 +3800,7 @@ async fn send_invoice_email(
 
     let settings = std::sync::Arc::new(settings);
 
-    tauri::async_runtime::spawn_blocking(move || {
-        let transport = build_smtp_transport(&settings)?;
-        transport.send(&email).map_err(|e| {
-            eprintln!("[email] send failed: {e}");
-            format!("Failed to send email: {e}")
-        })?;
-        Ok::<(), String>(())
-    })
-        .await
-    .map_err(|e| e.to_string())??;
+    send_email_via_smtp(settings, email, "invoice").await?;
 
     Ok(true)
 }
@@ -4275,7 +4275,8 @@ pub fn run() {
             update_expense,
             delete_expense,
             send_invoice_email,
-            send_test_email
+            send_test_email,
+            send_license_request_email
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -4643,4 +4644,200 @@ fn verify_license(license: String, pib: String) -> Result<license::license_paylo
     let pib_hash = license::crypto::sha256_hex(pib.trim());
     let now = OffsetDateTime::now_utc();
     license::license_validator::verify_license(&license, &pib_hash, public_key_pem, now)
+}
+
+/// Sends a generic license request email using configured SMTP.
+/// No attachments; body is provided by the UI.
+#[tauri::command]
+async fn send_license_request_email(
+    state: tauri::State<'_, DbState>,
+    input: SendLicenseRequestEmailInput,
+)
+    -> Result<bool, String>
+{
+    let settings = state
+        .with_read("send_license_request_email_settings", move |conn| read_settings_from_conn(conn))
+        .await?;
+
+    validate_smtp_settings(&settings)?;
+
+
+    // Hardcoded vendor recipient; ignore UI-provided value.
+    let to_raw = "dragisa1984@yahoo.com".to_string();
+    let subject: String = {
+        let s = input.subject.trim();
+        if s.is_empty() {
+            "Pausaler: zahtev za licencu".to_string()
+        } else {
+            s.to_string()
+        }
+    };
+
+    let from_mailbox: Mailbox = settings
+        .smtp_from
+        .parse()
+        .map_err(|_| "Invalid From address in SMTP settings.".to_string())?;
+    let to_mailbox: Mailbox = to_raw
+        .parse()
+        .map_err(|_| "Invalid recipient email address.".to_string())?;
+
+    let text_body: String = input.body.clone().unwrap_or_else(|| "".to_string());
+
+    // Build improved HTML from the structured plain-text body
+    fn build_html_from_text(text: &str) -> String {
+        let lines: Vec<&str> = text.lines().collect();
+        let mut header: Option<&str> = None;
+        let mut license_type_line: Option<&str> = None;
+        let mut code_header: Option<&str> = None;
+        let mut code_lines: Vec<&str> = Vec::new();
+        let mut company_header: Option<&str> = None;
+        let mut company_lines: Vec<&str> = Vec::new();
+        let mut note_header: Option<&str> = None;
+        let mut note_lines: Vec<&str> = Vec::new();
+
+        // Identify sections by localized headers (sr/en), case-insensitive
+        let mut i = 0usize;
+        while i < lines.len() {
+            let line = lines[i].trim();
+            let lower = line.to_ascii_lowercase();
+            if i == 0 && !line.is_empty() { header = Some(line); }
+            if lower.starts_with("tip licence:") || lower.starts_with("license type:") {
+                license_type_line = Some(line);
+                i += 1;
+                continue;
+            } else if lower.starts_with("aktivacioni kod:") || lower.starts_with("activation code:") {
+                // Collect subsequent non-empty lines until blank line
+                code_header = Some(line);
+                i += 1;
+                while i < lines.len() && !lines[i].trim().is_empty() {
+                    code_lines.push(lines[i]);
+                    i += 1;
+                }
+            } else if lower.starts_with("podaci o preduzeću:") || lower.starts_with("company details:") {
+                // Collect next few lines (label: value)
+                company_header = Some(line);
+                i += 1;
+                while i < lines.len() {
+                    let s = lines[i].trim();
+                    if s.is_empty() { break; }
+                    // Expect "Label: value"
+                    company_lines.push(lines[i]);
+                    i += 1;
+                }
+            } else if lower.starts_with("napomena korisnika:") || lower.starts_with("user note:") {
+                note_header = Some(line);
+                i += 1;
+                while i < lines.len() {
+                    note_lines.push(lines[i]);
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+
+        // HTML assembly
+        let mut html = String::new();
+
+        if let Some(h) = header {
+            html.push_str("<p><strong>");
+            html.push_str(&escape_html(h));
+            html.push_str("</strong></p>");
+        }
+        if let Some(lt) = license_type_line {
+            html.push_str("<p>");
+            html.push_str(&escape_html(lt));
+            html.push_str("</p>");
+        }
+
+        if !code_lines.is_empty() {
+            html.push_str("<div><div style=\"font-weight:600;margin:8px 0 4px 0\">");
+            if let Some(ch) = code_header { html.push_str(&escape_html(ch)); } else { html.push_str("Activation code:"); }
+            html.push_str("</div>");
+            let joined = code_lines.join("\n");
+            html.push_str("<pre style=\"font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;white-space:pre-wrap;word-break:break-word;border:1px solid #ddd;border-radius:6px;padding:12px;background:#f8f8f8;\">");
+            html.push_str(&escape_html(&joined));
+            html.push_str("</pre></div>");
+        }
+
+        if !company_lines.is_empty() {
+            html.push_str("<div><div style=\"font-weight:600;margin:8px 0 4px 0\">");
+            if let Some(ch) = company_header { html.push_str(&escape_html(ch)); } else { html.push_str("Company details:"); }
+            html.push_str("</div>");
+            html.push_str("<table style=\"border-collapse:collapse;font-size:14px\">");
+            for row in company_lines {
+                let parts: Vec<&str> = row.splitn(2, ':').collect();
+                let label = parts.get(0).map(|s| s.trim()).unwrap_or("");
+                let value = parts.get(1).map(|s| s.trim()).unwrap_or("");
+                html.push_str("<tr>");
+                html.push_str("<td style=\"padding:2px 8px 2px 0;color:#555\">");
+                html.push_str(&escape_html(label));
+                html.push_str(":</td>");
+                html.push_str("<td style=\"padding:2px 0\">");
+                html.push_str(&escape_html(value));
+                html.push_str("</td></tr>");
+            }
+            html.push_str("</table></div>");
+        }
+
+        if !note_lines.is_empty() {
+            html.push_str("<div><div style=\"font-weight:600;margin:8px 0 4px 0\">");
+            if let Some(nh) = note_header { html.push_str(&escape_html(nh)); } else { html.push_str("User note:"); }
+            html.push_str("</div>");
+            let note_text = note_lines.join("\n");
+            let escaped = escape_html(&note_text).replace('\n', "<br>");
+            html.push_str("<p>");
+            html.push_str(&escaped);
+            html.push_str("</p></div>");
+        }
+
+        html
+    }
+
+    let html_body: String = if text_body.trim().is_empty() {
+        "<p><strong>License request</strong></p>".to_string()
+    } else {
+        build_html_from_text(&text_body)
+    };
+    
+    let email = Message::builder()
+        .from(from_mailbox)
+        .to(to_mailbox)
+        .subject(subject)
+        .multipart(
+            MultiPart::alternative()
+                .singlepart(SinglePart::plain(text_body))
+                .singlepart(SinglePart::html(html_body)),
+        )
+        .map_err(|e| format!("Failed to build email: {e}"))?;
+
+    let settings = std::sync::Arc::new(settings);
+
+    // Reuse shared SMTP send path (same as invoice)
+    send_email_via_smtp(settings, email, "license").await?;
+
+    Ok(true)
+}
+
+/// Shared helper: builds transport and sends a fully constructed `Message` via SMTP.
+/// Logs host/port/TLS mode and timing information. Never logs credentials.
+async fn send_email_via_smtp(
+    settings: std::sync::Arc<Settings>,
+    email: Message,
+    label: &str,
+) -> Result<(), String> {
+    let host = settings.smtp_host.clone();
+    let port = settings.smtp_port;
+    let tls_mode = resolved_smtp_tls_mode(settings.smtp_tls_mode, settings.smtp_port);
+    let _ = (host, port, tls_mode);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let transport = build_smtp_transport(&settings)?;
+        transport.send(&email).map_err(|e| format!("Failed to send email: {e}"))?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    Ok(())
 }

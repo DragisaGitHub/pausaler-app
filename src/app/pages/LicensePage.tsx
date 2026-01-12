@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Descriptions, Form, Input, Modal, Space, Typography, message } from 'antd';
+import { Alert, Button, Card, Descriptions, Form, Input, Modal, Radio, Space, Typography, message } from 'antd';
 import { CopyOutlined, KeyOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { generateActivationCode, getLicenseStatus, getStoredLicense, validateAndStoreLicense } from '../services/licenseService';
+import { getAppMeta, setAppMeta } from '../services/licenseCodeGenerator';
 import type { LicenseStatus } from '../types/license';
 import { getDevForcedLockInfo, setDevForcedLockLevelPersisted } from '../services/devLockService';
 import type { LockLevel } from '../types/license';
 import { HARD_BLOCKED, VIEW_ONLY_ALLOWED, VIEW_ONLY_BLOCKED } from '../services/lockAudit';
 import { ensureTrialHydrated, getTrialInfo } from '../services/trialService';
 import dayjs from 'dayjs';
+import { getStorage } from '../services/storageProvider';
+import { isSmtpConfigured } from '../services/smtp';
+import type { Settings } from '../types';
 
 function msToDays(ms: number): number {
   return Math.max(0, Math.ceil(ms / (24 * 60 * 60 * 1000)));
@@ -20,6 +24,7 @@ export function LicensePage() {
   const [statusText, setStatusText] = useState('');
   const [statusLoading, setStatusLoading] = useState(true);
   const [status, setStatus] = useState<LicenseStatus | null>(null);
+  const [settings, setSettings] = useState<Settings | null>(null);
 
   const [devLockInfoText, setDevLockInfoText] = useState<string | null>(null);
   const [devLockInfoLoading, setDevLockInfoLoading] = useState(false);
@@ -27,6 +32,14 @@ export function LicensePage() {
 
   const [activationCode, setActivationCode] = useState('');
   const [generating, setGenerating] = useState(false);
+
+  const [emailModalOpen, setEmailModalOpen] = useState(false);
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailForm] = Form.useForm();
+  const [licenseType, setLicenseType] = useState<'YEARLY' | 'LIFETIME'>('YEARLY');
+  const LICENSE_TYPE_META_KEY = 'licenseRequestType';
+  const [subjectDirty] = useState(false);
+  const [bodyDirty] = useState(false);
 
   const [licenseInput, setLicenseInput] = useState('');
   const [activating, setActivating] = useState(false);
@@ -43,6 +56,10 @@ export function LicensePage() {
   const refresh = async () => {
     setStatusLoading(true);
     try {
+      const storage = getStorage();
+      const sSettings = await storage.getSettings();
+      setSettings(sSettings);
+
       await ensureTrialHydrated();
       const s = await getLicenseStatus();
       setStatus(s);
@@ -92,7 +109,19 @@ export function LicensePage() {
   };
 
   useEffect(() => {
-    void refresh();
+    (async () => {
+      // Load persisted license request type (fallback YEARLY)
+      try {
+        const saved = await getAppMeta(LICENSE_TYPE_META_KEY);
+        const v = (saved || '').trim().toUpperCase();
+        if (v === 'YEARLY' || v === 'LIFETIME') {
+          setLicenseType(v as 'YEARLY' | 'LIFETIME');
+        }
+      } catch {
+        // ignore
+      }
+      await refresh();
+    })();
   }, []);
 
   const yearlyDaysLeft = useMemo(() => {
@@ -150,6 +179,98 @@ export function LicensePage() {
     }
   };
 
+  const vendorEmail = useMemo(() => 'dragisa1984@yahoo.com', []);
+
+  const defaultEmailSubject = useMemo(() => {
+    const typeLabel = licenseType === 'LIFETIME' ? t('license.typeLifetime') : t('license.typeYearly');
+    return `${t('license.emailDefaultSubject')} – ${typeLabel}`;
+  }, [t, licenseType]);
+
+  const buildDefaultEmailBody = (): string => {
+    const companyName = (settings?.companyName?.trim() || '-') || '-';
+    const companyEmail = (settings?.companyEmail?.trim() || '-') || '-';
+    const typeLabel = licenseType === 'LIFETIME' ? t('license.typeLifetime') : t('license.typeYearly');
+    const code = activationCode || '-';
+
+    const lines: string[] = [];
+    // Header and type
+    lines.push(t('license.emailRequestHeader'));
+    lines.push(`${t('license.emailLicenseType')}: ${typeLabel}`);
+    lines.push('');
+    // Activation code block
+    lines.push(`${t('license.emailActivationCodeHeader')}:`);
+    lines.push(code);
+    lines.push('');
+    // Company details
+    lines.push(`${t('license.emailCompanyHeader')}:`);
+    lines.push(`${t('license.emailCompanyName')}: ${companyName}`);
+    lines.push(`${t('license.emailCompanyEmail')}: ${companyEmail}`);
+    return lines.join('\n');
+  };
+
+  const openEmailModal = () => {
+    if (!settings) return;
+    emailForm.setFieldsValue({ note: '' });
+    setEmailModalOpen(true);
+  };
+
+  function humanReadableError(err: unknown): string {
+    const anyErr = err as any;
+    const msg = anyErr?.message || anyErr?.toString?.() || String(err);
+    if (!msg || msg === '[object Object]') return t('license.emailSendError');
+    return msg;
+  }
+
+  function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Timeout while sending email')), ms);
+      p
+        .then((v) => {
+          clearTimeout(timer);
+          resolve(v);
+        })
+        .catch((e) => {
+          clearTimeout(timer);
+          reject(e);
+        });
+    });
+  }
+
+  const doSendEmail = async () => {
+    if (!settings) return;
+    try {
+      const values = await emailForm.validateFields();
+      setEmailSending(true);
+      const storage = getStorage();
+      const subject = defaultEmailSubject;
+      const baseBody = buildDefaultEmailBody();
+      const note = (values.note ? String(values.note) : '').trim();
+      const body = note ? `${baseBody}\n\n${t('license.emailPersonalNote')}:\n${note}` : baseBody;
+      const ok = await withTimeout(
+        storage.sendLicenseRequestEmail({ to: vendorEmail, subject, body }),
+        20000
+      );
+      if (ok) {
+        message.success(t('license.emailSent'));
+        setEmailModalOpen(false);
+      } else {
+        message.error(t('license.emailSendError'));
+      }
+    } catch (e) {
+      if ((e as any)?.errorFields) {
+        // Validation errors already shown by antd.
+      } else {
+        console.error('License request email send failed:', e);
+        const msg = humanReadableError(e);
+        message.error(msg.includes('Timeout') ? msg : t('license.emailSendError'));
+      }
+    } finally {
+      setEmailSending(false);
+    }
+  };
+
+  // Subject/body are generated at send-time; no live syncing needed.
+
   const setForcedLockLevel = async (level: LockLevel | null) => {
     if (!import.meta.env.DEV) return;
     await setDevForcedLockLevelPersisted(level);
@@ -198,6 +319,46 @@ export function LicensePage() {
               autoSize={{ minRows: 3, maxRows: 6 }}
               placeholder={t('license.activationCodePlaceholder')}
             />
+
+            <Form layout="vertical">
+              <Form.Item label={t('license.desiredLicenseTypeLabel')} style={{ marginBottom: 8 }}>
+                <Radio.Group
+                  value={licenseType}
+                  onChange={async (e) => {
+                    const v = e.target.value as 'YEARLY' | 'LIFETIME';
+                    setLicenseType(v);
+                    try { await setAppMeta(LICENSE_TYPE_META_KEY, v); } catch {}
+                    // Regenerate defaults if modal is open and fields are not dirty
+                    if (emailModalOpen) {
+                      if (!subjectDirty) emailForm.setFieldValue('subject', `${t('license.emailDefaultSubject')} – ${v === 'LIFETIME' ? t('license.typeLifetime') : t('license.typeYearly')}`);
+                      if (!bodyDirty) emailForm.setFieldValue('body', buildDefaultEmailBody());
+                    }
+                  }}
+                >
+                  <Radio value="YEARLY">{t('license.typeYearly')}</Radio>
+                  <Radio value="LIFETIME">{t('license.typeLifetime')}</Radio>
+                </Radio.Group>
+              </Form.Item>
+            </Form>
+
+            <Typography.Paragraph style={{ marginBottom: 0 }}>
+              {t('license.sendEmailHelp')}
+            </Typography.Paragraph>
+            <Space>
+              <Button
+                onClick={openEmailModal}
+                disabled={!activationCode || !settings || !isSmtpConfigured({ smtpHost: settings.smtpHost, smtpPort: settings.smtpPort, smtpFrom: settings.smtpFrom })}
+              >
+                {t('license.sendEmail')}
+              </Button>
+              {!settings || !isSmtpConfigured({ smtpHost: settings.smtpHost, smtpPort: settings.smtpPort, smtpFrom: settings.smtpFrom }) ? (
+                <Typography.Text type="secondary">{t('license.emailSmtpNotConfigured')}</Typography.Text>
+              ) : null}
+            </Space>
+
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+              {t('license.emailHelperNote')}
+            </Typography.Paragraph>
           </Space>
         </Card>
       ) : null}
@@ -344,6 +505,24 @@ export function LicensePage() {
           </Space>
         </Card>
       ) : null}
+
+      <Modal
+        title={t('license.sendEmailTitle')}
+        open={emailModalOpen}
+        onCancel={() => setEmailModalOpen(false)}
+        okText={t('license.sendEmail')}
+        onOk={() => void doSendEmail()}
+        confirmLoading={emailSending}
+      >
+        <Form form={emailForm} layout="vertical">
+          <Form.Item label={t('license.emailRecipientLabel')}>
+            <Input value={vendorEmail} disabled readOnly />
+          </Form.Item>
+          <Form.Item name="note" label={t('license.emailNoteLabel')}>
+            <Input.TextArea autoSize={{ minRows: 4, maxRows: 12 }} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 }

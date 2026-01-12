@@ -153,5 +153,11 @@ export function createSqliteStorageAdapter(): StorageAdapter {
       body?: string;
       includePdf: boolean;
     }): Promise<boolean> => invokeLogged<boolean>('sendInvoiceEmail', 'send_invoice_email', { input }),
+
+    sendLicenseRequestEmail: async (input: {
+      to: string;
+      subject: string;
+      body?: string;
+    }): Promise<boolean> => invokeLogged<boolean>('sendLicenseRequestEmail', 'send_license_request_email', { input }),
   };
 }

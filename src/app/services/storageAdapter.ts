@@ -49,4 +49,11 @@ export interface StorageAdapter {
     body?: string;
     includePdf: boolean;
   }): Promise<boolean>;
+
+  // License request email (no attachments)
+  sendLicenseRequestEmail(input: {
+    to: string;
+    subject: string;
+    body?: string;
+  }): Promise<boolean>;
 }

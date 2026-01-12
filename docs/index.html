@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Paushaler — mini knjigovodstvo za paušalce</title>
+    <title>Pausaler — mini knjigovodstvo za paušalce</title>
     <meta name="description" content="Paushaler je desktop aplikacija za paušalce (Windows 10/11): fakture (PDF), troškovi, izveštaji, slanje faktura e-mailom i pregled prihoda i rashoda." />
     <style>
         :root {
@@ -239,6 +239,151 @@
         }
         @media (min-width: 720px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         @media (min-width: 1020px) { .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+        /* Minimal styles for screenshots gallery */
+        .gallery-item {
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            background: #fff;
+            overflow: hidden;
+            box-shadow: 0 6px 20px rgba(15, 23, 42, 0.05);
+            width: 100%;
+            height: 100%;
+            display: grid;
+            place-items: center;
+        }
+        .gallery-item img {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        /* Carousel styles */
+        .carousel { position: relative; }
+        .carousel-frame {
+            position: relative;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 0 56px; /* space so arrows sit outside viewport */
+        }
+        @media (max-width: 640px) { .carousel-frame { padding: 0 24px; } }
+        .carousel-viewport {
+            overflow: hidden;
+            border-radius: 12px;
+            height: clamp(220px, 42vw, 520px);
+        }
+        .carousel-track {
+            display: flex;
+            will-change: transform;
+            transition: transform 320ms ease;
+            touch-action: pan-y;
+            user-select: none;
+            height: 100%;
+        }
+        .carousel-slide {
+            flex: 0 0 100%;
+            height: 100%;
+            padding: 12px; /* subtle spacing between slides */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .carousel-arrow {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 38px;
+            height: 38px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            background: rgba(15, 23, 42, 0.06);
+            color: var(--text);
+            display: grid;
+            place-items: center;
+            cursor: pointer;
+        }
+        .carousel-arrow:hover { background: rgba(15, 23, 42, 0.10); }
+        .carousel-arrow svg { width: 18px; height: 18px; color: var(--accent); }
+        .carousel-arrow.prev { left: 12px; }
+        .carousel-arrow.next { right: 12px; }
+        .carousel-nav {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+            margin-top: 12px;
+        }
+        .carousel-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: rgba(15, 23, 42, 0.08);
+            padding: 0;
+            cursor: pointer;
+        }
+        .carousel-dot[aria-current="true"] {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+        /* Lightbox styles */
+        body.lightbox-open { overflow: hidden; }
+        .lightbox {
+            position: fixed;
+            inset: 0;
+            display: none;
+            z-index: 60;
+        }
+        .lightbox.is-open { display: grid; place-items: center; }
+        .lightbox-backdrop {
+            position: absolute;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.65);
+        }
+        .lightbox-content {
+            position: relative;
+            max-width: 90vw;
+            max-height: 86vh;
+            display: grid;
+            place-items: center;
+        }
+        .lightbox-img {
+            max-width: 90vw;
+            max-height: 80vh;
+            border-radius: 14px;
+            box-shadow: 0 24px 60px rgba(15, 23, 42, 0.35);
+            background: #fff;
+        }
+        .lightbox-close,
+        .lightbox-prev,
+        .lightbox-next {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.9);
+            color: var(--text);
+            display: grid;
+            place-items: center;
+            cursor: pointer;
+        }
+        .lightbox-close { top: 18px; right: 18px; }
+        .lightbox-prev { left: 18px; top: 50%; transform: translateY(-50%); }
+        .lightbox-next { right: 18px; top: 50%; transform: translateY(-50%); }
+        .lightbox-close svg,
+        .lightbox-prev svg,
+        .lightbox-next svg { width: 18px; height: 18px; color: var(--accent); }
+        .lightbox-counter {
+            position: absolute;
+            bottom: 18px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 6px 10px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid var(--border);
+            color: var(--muted2);
+            font-size: 12px;
+        }
         .card {
             border: 1px solid var(--border);
             border-radius: 14px;
@@ -338,6 +483,11 @@
             line-height: 1.6;
             max-width: 80ch;
         }
+        /* Contact layout */
+        .contact-grid { display: grid; gap: 12px; margin-top: 16px; }
+        @media (min-width: 900px) { .contact-grid { grid-template-columns: 1.3fr 0.7fr; } }
+        .contact-actions { display: grid; gap: 12px; align-content: start; }
+        .contact-email-fallback { color: var(--muted); font-size: 13px; }
         footer {
             margin-top: 22px;
             color: #94a3b8;
@@ -365,6 +515,7 @@
             <a href="#kako-radi">Kako radi</a>
             <a href="#cene">Cene</a>
             <a href="#pitanja">Pitanja</a>
+            <a href="#kontakt">Kontakt</a>
             <a href="#preuzimanje">Preuzimanje</a>
         </nav>
     </header>
@@ -437,6 +588,82 @@
                         </li>
                     </ul>
                 </aside>
+            </div>
+        </section>
+        <!-- Lightbox overlay for screenshots -->
+        <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Pregled slike">
+            <div class="lightbox-backdrop" data-close="true"></div>
+            <div class="lightbox-content">
+                <img class="lightbox-img" alt="" />
+                <div class="lightbox-counter" aria-live="polite"></div>
+                <button class="lightbox-prev" type="button" aria-label="Prethodna slika">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                        <path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+                <button class="lightbox-next" type="button" aria-label="Sledeća slika">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                        <path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+            </div>
+            <button class="lightbox-close" type="button" aria-label="Zatvori pregled">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Screenshots / Carousel -->
+        <section class="panel" id="screenshoti" aria-labelledby="screenshoti-naslov">
+            <h2 id="screenshoti-naslov">Kako izgleda aplikacija</h2>
+            <p class="lead">Pogled na glavne ekrane: fakture, klijenti, podešavanja i licenca.</p>
+
+            <div class="carousel" aria-label="Galerija ekrana aplikacije">
+                <div class="carousel-frame">
+                    <div class="carousel-viewport">
+                        <div class="carousel-track">
+                            <div class="carousel-slide">
+                                <div class="gallery-item">
+                                    <img src="assets/screenshots/faktura.png" alt="Fakture — lista i kreiranje PDF dokumenata" loading="lazy" />
+                                </div>
+                            </div>
+                            <div class="carousel-slide">
+                                <div class="gallery-item">
+                                    <img src="assets/screenshots/klijenti.png" alt="Klijenti — pregled i lista klijenata" loading="lazy" />
+                                </div>
+                            </div>
+                            <div class="carousel-slide">
+                                <div class="gallery-item">
+                                    <img src="assets/screenshots/podesavanje.png" alt="Podešavanja — konfiguracija aplikacije i opcije" loading="lazy" />
+                                </div>
+                            </div>
+                            <div class="carousel-slide">
+                                <div class="gallery-item">
+                                    <img src="assets/screenshots/licenca.png" alt="Licenca — aktivacija aplikacije nakon probnog perioda" loading="lazy" />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button class="carousel-arrow prev" type="button" aria-label="Prethodna slika">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                            <path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                    <button class="carousel-arrow next" type="button" aria-label="Sledeća slika">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                            <path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="carousel-nav" aria-label="Navigacija slajdova">
+                    <button class="carousel-dot" type="button" aria-label="Slajd 1" aria-current="true"></button>
+                    <button class="carousel-dot" type="button" aria-label="Slajd 2"></button>
+                    <button class="carousel-dot" type="button" aria-label="Slajd 3"></button>
+                    <button class="carousel-dot" type="button" aria-label="Slajd 4"></button>
+                </div>
             </div>
         </section>
 
@@ -629,6 +856,34 @@
             </div>
         </section>
 
+        <section class="panel" id="kontakt" aria-labelledby="kontakt-naslov">
+            <h2 id="kontakt-naslov">Kontakt</h2>
+            <p class="lead">Za licenciranje, pitanja i podršku u vezi sa aplikacijom.</p>
+
+            <div class="contact-grid" aria-label="Kontakt informacije">
+                <div class="card">
+                    <h3 style="margin: 0; font-size: 16px;">Autor</h3>
+                    <address>
+                        <div><strong>Dragiša Stankovski</strong></div>
+                        <div>Beograd – Zemun</div>
+                        <div>
+                            <span class="micro">E-mail: </span>
+                            <span id="contact-email-text" class="micro contact-email-fallback">dragisa1984 [at] yahoo [dot] com</span>
+                        </div>
+                    </address>
+                    <p class="micro">Odgovaram u najkraćem mogućem roku.</p>
+                </div>
+
+                <div class="contact-actions">
+                    <div class="cta-row">
+                        <a class="btn" id="contact-email-btn" data-mailto href="#" aria-label="Pošalji e-mail autoru">Pošalji e-mail</a>
+                    </div>
+                    <a id="contact-email-link" data-mailto href="#" aria-label="Pošalji e-mail (tekst link)">Pošalji e-mail (tekst link)</a>
+                    <div class="notice" role="note">Aplikacija radi lokalno (offline). Podaci ne idu na server.</div>
+                </div>
+            </div>
+        </section>
+
         <section class="panel" id="preuzimanje" aria-labelledby="preuzimanje-naslov">
             <h2 id="preuzimanje-naslov">Preuzimanje</h2>
             <p class="lead">Preuzmi instalaciju za Windows i kreni odmah.</p>
@@ -655,6 +910,12 @@
 
     <footer aria-label="Podnožje">
         <div>© Paushaler</div>
+        <div class="small">Autor: Dragiša Stankovski — Beograd – Zemun</div>
+        <div class="small">
+            <a id="footer-email" data-mailto href="#" aria-label="E-mail autora">
+                E-mail: <span id="footer-email-text">dragisa1984 [at] yahoo [dot] com</span>
+            </a>
+        </div>
         <div class="small">Preuzimanje ide sa zvaničnog izvora.</div>
     </footer>
 </div>
@@ -721,6 +982,274 @@
             hideVersion();
             // Keep fallbackDownloadUrl already applied.
         }
+    })();
+
+    // Contact / Email assembly to reduce spam scraping
+    (function initContactEmail() {
+        const user = "dragisa1984";
+        const domain = "yahoo.com";
+        const email = `${user}@${domain}`;
+        const subject = encodeURIComponent("Pausaler — Licenca / Podrška");
+        const body = encodeURIComponent("Zdravo, želim licencu / imam pitanje: ...");
+        const mailto = `mailto:${email}?subject=${subject}&body=${body}`;
+
+        const emailTextEl = document.getElementById("contact-email-text");
+        if (emailTextEl) { emailTextEl.textContent = email; }
+
+        const btn = document.getElementById("contact-email-btn");
+        const link = document.getElementById("contact-email-link");
+        const footerEmail = document.getElementById("footer-email");
+        const footerEmailText = document.getElementById("footer-email-text");
+
+        [btn, link, footerEmail].forEach((el) => { if (el) el.setAttribute("href", mailto); });
+        if (link) link.textContent = email;
+        if (footerEmailText) footerEmailText.textContent = email;
+    })();
+
+    // Screenshots carousel: autoplay, arrows, dots, swipe/drag
+    (function initCarousel() {
+        const section = document.getElementById("screenshoti");
+        if (!section) return;
+        const carousel = section.querySelector(".carousel");
+        const track = carousel?.querySelector(".carousel-track");
+        const viewport = carousel?.querySelector(".carousel-viewport");
+        const prevBtn = carousel?.querySelector(".carousel-arrow.prev");
+        const nextBtn = carousel?.querySelector(".carousel-arrow.next");
+        let dots = [];
+        const nav = carousel?.querySelector(".carousel-nav");
+        const slides = Array.from(track?.children || []);
+
+        if (!carousel || !track || !viewport || slides.length === 0) return;
+
+        let activeIndex = 0;
+        // Single-slide view only
+        let autoplayId = null;
+        let isHover = false;
+        let isInteracting = false;
+
+        const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+        const disableMotion = !!prefersReducedMotion?.matches;
+
+        // Build dots dynamically to match slides length
+        const buildDots = () => {
+            if (!nav) { dots = []; return; }
+            nav.innerHTML = "";
+            for (let i = 0; i < slides.length; i++) {
+                const btn = document.createElement('button');
+                btn.className = 'carousel-dot';
+                btn.type = 'button';
+                btn.setAttribute('aria-label', `Slajd ${i + 1}`);
+                if (i === activeIndex) btn.setAttribute('aria-current', 'true');
+                btn.addEventListener('click', () => { stopAutoplay(); goTo(i); startAutoplay(); });
+                nav.appendChild(btn);
+            }
+            dots = Array.from(nav.querySelectorAll('.carousel-dot'));
+        };
+        buildDots();
+
+        const update = (skipTransition = false) => {
+            if (skipTransition) {
+                track.style.transition = 'none';
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        track.style.transition = 'transform 320ms ease';
+                    });
+                });
+            }
+            const offset = -(activeIndex * 100);
+            track.style.transform = `translateX(${offset}%)`;
+
+            // Dots aria-current reflect selected slide
+            dots.forEach((d, i) => {
+                if (i === activeIndex) { d.setAttribute('aria-current', 'true'); }
+                else { d.removeAttribute('aria-current'); }
+            });
+        };
+
+        const goTo = (i) => {
+            activeIndex = (i + slides.length) % slides.length; // wrap for smoother autoplay
+            update(false);
+        };
+        const next = () => goTo(activeIndex + 1);
+        const prev = () => goTo(activeIndex - 1);
+
+        const startAutoplay = () => {
+            if (disableMotion) return;
+            if (autoplayId) return;
+            autoplayId = window.setInterval(() => {
+                if (!isHover && !isInteracting) next();
+            }, 4000);
+        };
+        const stopAutoplay = () => {
+            if (autoplayId) {
+                clearInterval(autoplayId);
+                autoplayId = null;
+            }
+        };
+
+        // Pause on hover (desktop)
+        carousel.addEventListener('mouseenter', () => { isHover = true; stopAutoplay(); });
+        carousel.addEventListener('mouseleave', () => { isHover = false; startAutoplay(); });
+
+        // Arrows
+        prevBtn?.addEventListener('click', () => { stopAutoplay(); prev(); startAutoplay(); });
+        nextBtn?.addEventListener('click', () => { stopAutoplay(); next(); startAutoplay(); });
+
+        // Dots are built dynamically in buildDots()
+
+        // Swipe / drag
+        let dragging = false;
+        let startX = 0;
+        let lastDelta = 0;
+
+        const getX = (e) => {
+            if (e && typeof e.clientX === "number") return e.clientX;
+            const t = (e && e.touches && e.touches[0]) || (e && e.changedTouches && e.changedTouches[0]);
+            return t ? t.clientX : 0;
+        };
+
+        const onPointerDown = (e) => {
+            dragging = true;
+            isInteracting = true;
+            stopAutoplay();
+            startX = getX(e);
+            lastDelta = 0;
+            try { viewport.setPointerCapture && viewport.setPointerCapture(e.pointerId); } catch {}
+        };
+        const onPointerMove = (e) => {
+            if (!dragging) return;
+            const x = getX(e);
+            const deltaPx = x - startX;
+            lastDelta = deltaPx;
+            const vw = viewport.clientWidth || 1;
+            const deltaPercent = (deltaPx / vw) * 100;
+            const base = -(activeIndex * 100);
+            track.style.transition = 'none';
+            track.style.transform = `translateX(${base + deltaPercent}%)`;
+        };
+        const onPointerUp = () => {
+            if (!dragging) return;
+            dragging = false;
+            isInteracting = false;
+            track.style.transition = 'transform 320ms ease';
+            const threshold = 30; // px
+            if (Math.abs(lastDelta) > threshold) {
+                if (lastDelta < 0) next(); else prev();
+            } else {
+                update(false);
+            }
+            startAutoplay();
+        };
+
+        viewport.addEventListener('pointerdown', onPointerDown);
+        viewport.addEventListener('pointermove', onPointerMove);
+        viewport.addEventListener('pointerup', onPointerUp);
+        viewport.addEventListener('pointercancel', () => { dragging = false; isInteracting = false; track.style.transition = 'transform 320ms ease'; update(false); });
+
+        // Touch fallback
+        viewport.addEventListener('touchstart', onPointerDown, { passive: true });
+        viewport.addEventListener('touchmove', onPointerMove, { passive: true });
+        viewport.addEventListener('touchend', onPointerUp, { passive: true });
+
+        // Resize
+        // No responsive slides-per-view, so no resize handling needed
+
+        // Reduced motion preference changes
+        try {
+            prefersReducedMotion.addEventListener('change', (e) => {
+                if (e.matches) stopAutoplay(); else startAutoplay();
+            });
+        } catch {}
+
+        update(true);
+        startAutoplay();
+    })();
+
+    // Screenshots Lightbox: fullscreen overlay with navigation and accessibility
+    (function initLightbox() {
+        const section = document.getElementById('screenshoti');
+        if (!section) return;
+        const carouselImages = Array.from(section.querySelectorAll('.gallery-item img'));
+        if (carouselImages.length === 0) return;
+
+        // Make images focusable for keyboard activation
+        carouselImages.forEach(img => {
+            img.setAttribute('tabindex', '0');
+        });
+
+        const lightbox = document.getElementById('lightbox');
+        if (!lightbox) return;
+        const imgEl = lightbox.querySelector('.lightbox-img');
+        const closeBtn = lightbox.querySelector('.lightbox-close');
+        const prevBtn = lightbox.querySelector('.lightbox-prev');
+        const nextBtn = lightbox.querySelector('.lightbox-next');
+        const backdrop = lightbox.querySelector('.lightbox-backdrop');
+        const counter = lightbox.querySelector('.lightbox-counter');
+
+        let current = 0;
+        let lastFocus = null;
+
+        const total = carouselImages.length;
+
+        const show = (index) => {
+            current = (index + total) % total;
+            const src = carouselImages[current].getAttribute('src');
+            const alt = carouselImages[current].getAttribute('alt') || '';
+            if (imgEl) {
+                imgEl.setAttribute('src', src || '');
+                imgEl.setAttribute('alt', alt);
+            }
+            if (counter) counter.textContent = `${current + 1} / ${total}`;
+        };
+
+        const open = (index, triggerEl) => {
+            lastFocus = triggerEl || null;
+            show(index);
+            lightbox.classList.add('is-open');
+            document.body.classList.add('lightbox-open');
+            lightbox.setAttribute('aria-hidden', 'false');
+            // Focus close button
+            if (closeBtn && typeof closeBtn.focus === 'function') closeBtn.focus();
+            document.addEventListener('keydown', onKeyDown);
+        };
+
+        const close = () => {
+            lightbox.classList.remove('is-open');
+            document.body.classList.remove('lightbox-open');
+            lightbox.setAttribute('aria-hidden', 'true');
+            document.removeEventListener('keydown', onKeyDown);
+            // Restore focus
+            if (lastFocus && typeof lastFocus.focus === 'function') {
+                try { lastFocus.focus(); } catch {}
+            }
+        };
+
+        const prev = () => { show(current - 1); };
+        const next = () => { show(current + 1); };
+
+        const onKeyDown = (e) => {
+            if (!lightbox.classList.contains('is-open')) return;
+            if (e.key === 'Escape') { e.preventDefault(); close(); }
+            else if (e.key === 'ArrowLeft') { e.preventDefault(); prev(); }
+            else if (e.key === 'ArrowRight') { e.preventDefault(); next(); }
+        };
+
+        // Open on click or keyboard (Enter/Space)
+        carouselImages.forEach((img, i) => {
+            img.addEventListener('click', () => open(i, img));
+            img.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    open(i, img);
+                }
+            });
+        });
+
+        // Controls and backdrop
+        closeBtn?.addEventListener('click', () => close());
+        prevBtn?.addEventListener('click', () => prev());
+        nextBtn?.addEventListener('click', () => next());
+        backdrop?.addEventListener('click', () => close());
     })();
 </script>
 </body>
