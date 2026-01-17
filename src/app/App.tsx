@@ -18,6 +18,8 @@ import { useTranslation } from 'react-i18next';
 import i18n, { normalizeLanguage } from './i18n';
 import { getStorage } from './services/storageProvider';
 import { SetupCompanyPage } from './pages/SetupCompanyPage';
+import { message } from 'antd';
+import { listen } from '@tauri-apps/api/event';
 
 const storage = getStorage();
 
@@ -36,6 +38,20 @@ export default function App() {
         void i18n.changeLanguage(lang);
       }
     })();
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      try {
+        unlisten = await listen('restore_applied', () => {
+          message.success(i18n.t('settings.backup.restoreAppliedSuccess'));
+        });
+      } catch {}
+    })();
+    return () => {
+      if (unlisten) unlisten();
+    };
   }, []);
 
   const appLang = normalizeLanguage(i18nFromHook.language);

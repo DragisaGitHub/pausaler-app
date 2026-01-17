@@ -19,8 +19,69 @@ use lettre::message::{header::ContentType, Attachment, Mailbox, Message, MultiPa
 use lettre::transport::smtp::client::{Tls, TlsParameters};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{SmtpTransport, Transport};
+use zip::{write::FileOptions, ZipArchive, ZipWriter};
 
 mod license;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupMetadataJson {
+    app_name: String,
+    app_version: String,
+    created_at: String,
+    platform: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schema_version: Option<u32>,
+    archive_format_version: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupResult {
+    path: String,
+    size_bytes: u64,
+    created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupMetadataResult {
+    app_name: String,
+    app_version: String,
+    created_at: String,
+    platform: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schema_version: Option<u32>,
+    archive_format_version: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RestoreStageResult {
+    staged_at: String,
+    requires_restart: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LastBackupJson {
+    path: String,
+    created_at: String,
+    size_bytes: u64,
+    app_version: String,
+    archive_format_version: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LastBackupInfo {
+    path: String,
+    created_at: String,
+    size_bytes: u64,
+    app_version: String,
+    archive_format_version: u32,
+    missing: bool,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
@@ -4144,6 +4205,65 @@ fn resolve_updates_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(std::env::temp_dir().join("pausaler-app").join("updates"))
 }
 
+fn resolve_app_data_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    if let Ok(dir) = app.path().app_data_dir() { return Ok(dir); }
+    if let Ok(dir) = app.path().app_local_data_dir() { return Ok(dir); }
+    if let Ok(exe) = std::env::current_exe() { if let Some(dir) = exe.parent() { return Ok(dir.to_path_buf()); } }
+    std::env::current_dir().map_err(|e| e.to_string())
+}
+
+fn safe_join(base: &PathBuf, rel: &str) -> Option<PathBuf> {
+    let mut out = base.clone();
+    for part in rel.split('/') {
+        if part.is_empty() || part == "." { continue; }
+        if part == ".." { return None; }
+        out.push(part);
+    }
+    Some(out)
+}
+
+fn now_iso_basic() -> String {
+    OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_else(|_| "".to_string())
+}
+
+fn compute_dir_size(root: &PathBuf) -> u64 {
+    let mut total: u64 = 0;
+    let mut stack: Vec<PathBuf> = vec![root.clone()];
+    while let Some(p) = stack.pop() {
+        if let Ok(meta) = fs::metadata(&p) {
+            if meta.is_file() {
+                total = total.saturating_add(meta.len());
+            } else if meta.is_dir() {
+                if let Ok(rd) = fs::read_dir(&p) {
+                    for e in rd.flatten() { stack.push(e.path()); }
+                }
+            }
+        }
+    }
+    total
+}
+
+fn copy_dir_recursive(src: &PathBuf, dest: &PathBuf) -> Result<(), String> {
+    if !src.exists() { return Ok(()); }
+    fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    let mut stack: Vec<(PathBuf, PathBuf)> = vec![(src.clone(), dest.clone())];
+    while let Some((s, d)) = stack.pop() {
+        for entry in fs::read_dir(&s).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let sp = entry.path();
+            let dp = d.join(entry.file_name());
+            let meta = entry.metadata().map_err(|e| e.to_string())?;
+            if meta.is_dir() {
+                fs::create_dir_all(&dp).map_err(|e| e.to_string())?;
+                stack.push((sp, dp));
+            } else {
+                fs::copy(&sp, &dp).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn download_update_installer(app: tauri::AppHandle, url: String) -> Result<String, String> {
     let u = url.trim();
@@ -4229,6 +4349,32 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let handle = app.handle();
+            {
+                let root = resolve_app_data_root(&handle)?;
+                let restore_dir = root.join("restore");
+                let plan_path = restore_dir.join("restore-plan.json");
+                if plan_path.exists() {
+                    let db_path = resolve_db_path(&handle)?;
+                    let ts = OffsetDateTime::now_utc();
+                    let suffix = ts.format(&time::macros::format_description!("[year][month][day]-[hour][minute][second]")).unwrap_or_else(|_| "backup".to_string());
+                    let backup_path = db_path.with_file_name(format!("pausaler.db.bak-{}", suffix));
+                    if db_path.exists() { let _ = fs::copy(&db_path, &backup_path); }
+
+                    let plan_json = std::fs::read_to_string(&plan_path).unwrap_or_default();
+                    let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap_or(serde_json::json!({}));
+                    let staged_db = PathBuf::from(plan.get("stagedDbPath").and_then(|v| v.as_str()).unwrap_or(""));
+                    let staged_assets = PathBuf::from(plan.get("stagedAssetsPath").and_then(|v| v.as_str()).unwrap_or(""));
+
+                    if staged_db.exists() { let _ = std::fs::rename(&staged_db, &db_path); }
+                    if staged_assets.exists() {
+                        let dest_assets = root.join("assets");
+                        let _ = copy_dir_recursive(&staged_assets, &dest_assets);
+                    }
+                    let _ = std::fs::remove_file(&plan_path);
+                    let _ = std::fs::remove_dir_all(root.join("restore_stage"));
+                    let _ = handle.emit("restore_applied", serde_json::json!({ "ok": true }));
+                }
+            }
             let db = DbState::new(&handle)?;
             app.manage(db);
 
@@ -4244,6 +4390,10 @@ pub fn run() {
             quit_app,
             download_update_installer,
             run_installer_and_exit,
+            create_backup_archive,
+            get_last_backup_metadata,
+            inspect_backup_archive,
+            stage_restore_archive,
             list_serbia_cities,
             export_invoice_pdf_to_downloads,
             export_invoices_csv,
@@ -4824,7 +4974,7 @@ async fn send_license_request_email(
 async fn send_email_via_smtp(
     settings: std::sync::Arc<Settings>,
     email: Message,
-    label: &str,
+    _label: &str,
 ) -> Result<(), String> {
     let host = settings.smtp_host.clone();
     let port = settings.smtp_port;
@@ -4840,4 +4990,180 @@ async fn send_email_via_smtp(
     .map_err(|e| e.to_string())??;
 
     Ok(())
+}
+
+fn read_metadata_from_zip<R: std::io::Read + std::io::Seek>(mut ar: ZipArchive<R>) -> Result<BackupMetadataResult, String> {
+    let mut file = ar.by_name("metadata.json").map_err(|_| "metadata.json not found".to_string())?;
+    let mut buf = Vec::new();
+    use std::io::Read as _;
+    file.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let parsed: BackupMetadataJson = serde_json::from_slice(&buf).map_err(|e| e.to_string())?;
+    Ok(BackupMetadataResult {
+        app_name: parsed.app_name,
+        app_version: parsed.app_version,
+        created_at: parsed.created_at,
+        platform: parsed.platform,
+        schema_version: parsed.schema_version,
+        archive_format_version: parsed.archive_format_version,
+    })
+}
+
+#[tauri::command]
+async fn inspect_backup_archive(archive_path: String) -> Result<BackupMetadataResult, String> {
+    let f = std::fs::File::open(&archive_path).map_err(|e| e.to_string())?;
+    let ar = ZipArchive::new(f).map_err(|e| e.to_string())?;
+    read_metadata_from_zip(ar)
+}
+
+#[tauri::command]
+async fn create_backup_archive(app: tauri::AppHandle, dest_path: String) -> Result<BackupResult, String> {
+    let dest = PathBuf::from(dest_path);
+    let parent = dest.parent().ok_or_else(|| "Invalid destination path".to_string())?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+
+    let db_path = resolve_db_path(&app)?;
+    if !db_path.exists() { return Err("Database file not found".to_string()); }
+    let app_root = resolve_app_data_root(&app)?;
+    let assets_dir = app_root.join("assets");
+
+    let mut total_bytes: u64 = 0;
+    total_bytes = total_bytes.saturating_add(fs::metadata(&db_path).map_err(|e| e.to_string())?.len());
+    if assets_dir.exists() { total_bytes = total_bytes.saturating_add(compute_dir_size(&assets_dir)); }
+    let max_bytes: u64 = 500 * 1024 * 1024;
+    if total_bytes > max_bytes { return Err("Backup size exceeds 500MB limit".to_string()); }
+
+    let tmp_path = parent.join(".pausaler-backup.tmp");
+    if tmp_path.exists() { let _ = fs::remove_file(&tmp_path); }
+
+    let f = std::fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
+    let mut zip = ZipWriter::new(f);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    use std::io::Write as _;
+
+    let pi = app.package_info();
+    let meta = BackupMetadataJson {
+        app_name: pi.name.clone(),
+        app_version: pi.version.to_string(),
+        created_at: now_iso_basic(),
+        platform: std::env::consts::OS.to_string(),
+        schema_version: Some(8),
+        archive_format_version: 1,
+    };
+    let meta_json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
+    zip.start_file("metadata.json", options).map_err(|e| e.to_string())?;
+    zip.write_all(&meta_json).map_err(|e| e.to_string())?;
+
+    {
+        let mut db_file = std::fs::File::open(&db_path).map_err(|e| e.to_string())?;
+        zip.start_file("pausaler.db", options).map_err(|e| e.to_string())?;
+        std::io::copy(&mut db_file, &mut zip).map_err(|e| e.to_string())?;
+    }
+
+    if assets_dir.exists() {
+        let mut stack: Vec<PathBuf> = vec![assets_dir.clone()];
+        while let Some(cur) = stack.pop() {
+            for entry in fs::read_dir(&cur).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let path = entry.path();
+                let rel = path.strip_prefix(&app_root).unwrap_or(&path);
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                let meta = entry.metadata().map_err(|e| e.to_string())?;
+                if meta.is_dir() {
+                    stack.push(path);
+                } else {
+                    zip.start_file(rel_str, options).map_err(|e| e.to_string())?;
+                    let mut rf = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+                    std::io::copy(&mut rf, &mut zip).map_err(|e| e.to_string())?;
+                }
+            }
+        }
+    }
+
+    zip.finish().map_err(|e| e.to_string())?;
+    let size_bytes = fs::metadata(&tmp_path).map_err(|e| e.to_string())?.len();
+    std::fs::rename(&tmp_path, &dest).map_err(|e| e.to_string())?;
+
+    let lb = LastBackupJson {
+        path: dest.to_string_lossy().to_string(),
+        created_at: meta.created_at.clone(),
+        size_bytes,
+        app_version: meta.app_version.clone(),
+        archive_format_version: meta.archive_format_version,
+    };
+    let root = resolve_app_data_root(&app)?;
+    let lb_path = root.join("last-backup.json");
+    let lb_json = serde_json::to_vec(&lb).map_err(|e| e.to_string())?;
+    fs::write(&lb_path, &lb_json).map_err(|e| e.to_string())?;
+
+    Ok(BackupResult { path: dest.to_string_lossy().to_string(), size_bytes, created_at: meta.created_at })
+}
+
+#[tauri::command]
+async fn get_last_backup_metadata(app: tauri::AppHandle) -> Result<LastBackupInfo, String> {
+    let root = resolve_app_data_root(&app)?;
+    let lb_path = root.join("last-backup.json");
+    if !lb_path.exists() {
+        return Err("NO_LAST_BACKUP".to_string());
+    }
+    let buf = fs::read(&lb_path).map_err(|e| e.to_string())?;
+    let parsed: LastBackupJson = serde_json::from_slice(&buf).map_err(|e| e.to_string())?;
+    let missing = !PathBuf::from(&parsed.path).exists();
+    Ok(LastBackupInfo {
+        path: parsed.path,
+        created_at: parsed.created_at,
+        size_bytes: parsed.size_bytes,
+        app_version: parsed.app_version,
+        archive_format_version: parsed.archive_format_version,
+        missing,
+    })
+}
+
+#[tauri::command]
+async fn stage_restore_archive(app: tauri::AppHandle, archive_path: String) -> Result<RestoreStageResult, String> {
+    let f = std::fs::File::open(&archive_path).map_err(|e| e.to_string())?;
+    let mut ar = ZipArchive::new(f).map_err(|e| e.to_string())?;
+    let _meta = read_metadata_from_zip(ZipArchive::new(std::fs::File::open(&archive_path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?)?;
+
+    let mut has_db = false;
+    for i in 0..ar.len() {
+        let name = ar.by_index(i).map_err(|e| e.to_string())?.name().to_string();
+        if name == "pausaler.db" { has_db = true; break; }
+    }
+    if !has_db { return Err("Archive missing pausaler.db".to_string()); }
+
+    let root = resolve_app_data_root(&app)?;
+    let stage_dir = root.join("restore_stage").join(format!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()));
+    fs::create_dir_all(&stage_dir).map_err(|e| e.to_string())?;
+
+    for i in 0..ar.len() {
+        let mut file = ar.by_index(i).map_err(|e| e.to_string())?;
+        let name = file.name().to_string();
+        let allowed = name == "pausaler.db" || name == "metadata.json" || name.starts_with("assets/");
+        if !allowed { continue; }
+        if name.contains("../") { return Err("Invalid archive entry path".to_string()); }
+        let out_path = safe_join(&stage_dir, &name).ok_or_else(|| "Invalid path".to_string())?;
+        if let Some(parent) = out_path.parent() { fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+        let mut out_file = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
+        std::io::copy(&mut file, &mut out_file).map_err(|e| e.to_string())?;
+    }
+
+    let staged_db = stage_dir.join("pausaler.db");
+    if !staged_db.exists() { return Err("Failed to stage database".to_string()); }
+
+    let restore_dir = root.join("restore");
+    fs::create_dir_all(&restore_dir).map_err(|e| e.to_string())?;
+    let staged_target = restore_dir.join("pausaler.db");
+    if staged_target.exists() { let _ = fs::remove_file(&staged_target); }
+    fs::copy(&staged_db, &staged_target).map_err(|e| e.to_string())?;
+
+    let plan = serde_json::json!({
+        "archivePath": archive_path,
+        "stagedDbPath": staged_target.to_string_lossy().to_string(),
+        "stagedAssetsPath": stage_dir.join("assets").to_string_lossy().to_string(),
+        "createdAt": now_iso_basic(),
+    });
+    let plan_path = restore_dir.join("restore-plan.json");
+    std::fs::write(&plan_path, serde_json::to_vec(&plan).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+
+    Ok(RestoreStageResult { staged_at: plan["createdAt"].as_str().unwrap_or("").to_string(), requires_restart: true })
 }

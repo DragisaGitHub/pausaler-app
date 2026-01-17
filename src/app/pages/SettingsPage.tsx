@@ -14,6 +14,7 @@ import { sendTestEmail } from '../services/smtpTest';
 import { getVersion } from '@tauri-apps/api/app';
 import { open } from '@tauri-apps/plugin-shell';
 import { checkForUpdatesCached, type UpdateManifest } from '../services/updateService.ts';
+import { createBackupArchive, inspectBackupArchive, pickBackupOpenPath, pickBackupSavePath, quitApp, stageRestoreArchive, getLastBackupMetadata, type LastBackupInfo } from '../services/backupService';
 
 function sanitizeSmtpPassword(value: string): string {
   return value.replace(/\s+/g, '');
@@ -119,6 +120,38 @@ export function SettingsPage() {
   useEffect(() => {
     return;
   }, []);
+
+  const [lastBackup, setLastBackup] = useState<LastBackupInfo | null>(null);
+  useEffect(() => {
+    if (activeTabKey !== 'backup') return;
+    let mounted = true;
+    void (async () => {
+      try {
+        const info = await getLastBackupMetadata();
+        if (!mounted) return;
+        setLastBackup(info);
+      } catch {}
+    })();
+    return () => { mounted = false; };
+  }, [activeTabKey]);
+
+  const formatBackupWhen = (lang: string, iso: string): string => {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    if (lang.startsWith('en')) {
+      const mnames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const m = mnames[d.getMonth()];
+      const day = String(d.getDate()).padStart(2, '0');
+      const yr = d.getFullYear();
+      return `${m} ${day}, ${yr} ${hh}:${mm}`;
+    }
+    const day = String(d.getDate()).padStart(2, '0');
+    const mo = String(d.getMonth() + 1).padStart(2, '0');
+    const yr = d.getFullYear();
+    return `${day}.${mo}.${yr} ${hh}:${mm}`;
+  };
 
   const handleCheckUpdates = async () => {
     if (checkingUpdates) return;
@@ -399,6 +432,101 @@ export function SettingsPage() {
                         )}
                       </div>
                     </Form.Item>
+                  </div>
+                ),
+              },
+              {
+                key: 'backup',
+                label: t('settings.backup.tab'),
+                children: (
+                  <div style={{ paddingTop: 8 }}>
+                    <Typography.Title level={4} style={{ marginTop: 0 }}>{t('settings.backup.createTitle')}</Typography.Title>
+                    <Space wrap style={{ marginBottom: 12 }}>
+                      <Button
+                        onClick={async () => {
+                          const today = new Date();
+                          const yyyy = today.getFullYear();
+                          const mm = String(today.getMonth() + 1).padStart(2, '0');
+                          const dd = String(today.getDate()).padStart(2, '0');
+                          const defaultName = `pausaler-backup-${yyyy}-${mm}-${dd}.pausaler-backup`;
+                          const dest = await pickBackupSavePath(defaultName);
+                          if (!dest) return;
+                          try {
+                            const res = await createBackupArchive(dest);
+                            message.success(t('settings.backup.createdToast', { path: res.path, sizeKb: Math.round(res.sizeBytes / 1024) }));
+                            try {
+                              const info = await getLastBackupMetadata();
+                              setLastBackup(info);
+                            } catch {}
+                          } catch (e: any) {
+                            const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
+                            message.error(msg || t('settings.backup.createError'));
+                          }
+                        }}
+                        disabled={!canWriteSettings}
+                      >
+                        {t('settings.backup.createButton')}
+                      </Button>
+                      <Typography.Text type="secondary">{t('settings.backup.createHelp')}</Typography.Text>
+                      <div style={{ width: '100%' }} />
+                      <Typography.Text type="secondary">
+                        {lastBackup
+                          ? (lastBackup.missing
+                              ? t('settings.backup.last.missing')
+                              : t('settings.backup.last.info', {
+                                  when: formatBackupWhen(normalizeLanguage(i18n.language), lastBackup.createdAt),
+                                  file: String(lastBackup.path).split(/[\\/]/).pop() || '',
+                                  sizeKb: Math.round(lastBackup.sizeBytes / 1024),
+                                }))
+                          : t('settings.backup.last.none')}
+                      </Typography.Text>
+                    </Space>
+
+                    <Divider style={{ margin: '12px 0' }} />
+
+                    <Typography.Title level={4} style={{ marginTop: 0 }}>{t('settings.backup.restoreTitle')}</Typography.Title>
+                    <Space wrap style={{ marginBottom: 12 }}>
+                      <Button
+                        onClick={async () => {
+                          const path = await pickBackupOpenPath();
+                          if (!path) return;
+                          try {
+                            const meta = await inspectBackupArchive(path);
+                            const confirmed = await new Promise<boolean>((resolve) => {
+                              const key = 'backup-restore-confirm';
+                              const content = (
+                                <div>
+                                  <Descriptions bordered size="small" column={1} style={{ marginBottom: 12 }}>
+                                    <Descriptions.Item label={t('settings.backup.restoreConfirmCreatedAt')}>{meta.createdAt || '-'}</Descriptions.Item>
+                                    <Descriptions.Item label={t('settings.backup.restoreConfirmAppVersion')}>{meta.appVersion || '-'}</Descriptions.Item>
+                                    <Descriptions.Item label={t('settings.backup.restoreConfirmPlatform')}>{meta.platform || '-'}</Descriptions.Item>
+                                    <Descriptions.Item label={t('settings.backup.restoreConfirmArchiveFormat')}>{String(meta.archiveFormatVersion)}</Descriptions.Item>
+                                  </Descriptions>
+                                  <Space>
+                                    <Button type="primary" onClick={() => { message.destroy(key); resolve(true); }}>{t('settings.backup.restoreConfirmApplyButton')}</Button>
+                                    <Button onClick={() => { message.destroy(key); resolve(false); }}>{t('common.cancel')}</Button>
+                                  </Space>
+                                </div>
+                              );
+                              message.open({ key, type: 'info', content, duration: 0 });
+                            });
+                            if (!confirmed) return;
+                            const staged = await stageRestoreArchive(path);
+                            if (staged.requiresRestart) {
+                              message.success(t('settings.backup.restoreStaged'));
+                              await quitApp();
+                            }
+                          } catch (e: any) {
+                            const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
+                            message.error(msg || t('settings.backup.restoreStageError'));
+                          }
+                        }}
+                        disabled={!canWriteSettings}
+                      >
+                        {t('settings.backup.restoreButton')}
+                      </Button>
+                      <Typography.Text type="secondary">{t('settings.backup.restoreHelp')}</Typography.Text>
+                    </Space>
                   </div>
                 ),
               },
