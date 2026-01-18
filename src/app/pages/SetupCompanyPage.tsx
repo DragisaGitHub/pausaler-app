@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Alert, Button, Card, Form, Input, Select, Upload, message, Space, Typography } from 'antd';
+import { Alert, Button, Card, Form, Input, Select, Upload, message, Space, Typography, Descriptions } from 'antd';
 import { UploadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -8,6 +8,7 @@ import { useSerbiaCities, type SerbiaCitySelectOption } from '../hooks/useSerbia
 import { getStorage } from '../services/storageProvider';
 import { generateActivationCode } from '../services/licenseCodeGenerator';
 import { startTrialIfNeeded } from '../services/trialService';
+import { pickBackupOpenPath, inspectBackupArchive, stageRestoreArchive, quitApp } from '../services/backupService';
 
 type SetupCompanyPageProps = {
   onCompleted?: () => void;
@@ -91,6 +92,52 @@ export function SetupCompanyPage({ onCompleted }: SetupCompanyPageProps) {
 
   return (
     <div style={{ maxWidth: 800 }}>
+      <Card style={{ marginBottom: 16 }} title={t('setup.restore.title')}>
+        <Space direction="vertical" size={12}>
+          <Typography.Text type="secondary">{t('setup.restore.help')}</Typography.Text>
+          <Button
+            onClick={async () => {
+              const path = await pickBackupOpenPath();
+              if (!path) return;
+              try {
+                const meta = await inspectBackupArchive(path);
+                const confirmed = await new Promise<boolean>((resolve) => {
+                  const key = 'setup-restore-confirm';
+                  const content = (
+                    <div>
+                      <Descriptions bordered size="small" column={1} style={{ marginBottom: 12 }}>
+                        <Descriptions.Item label={t('settings.backup.restoreConfirmCreatedAt')}>{meta.createdAt || '-'}</Descriptions.Item>
+                        <Descriptions.Item label={t('settings.backup.restoreConfirmAppVersion')}>{meta.appVersion || '-'}</Descriptions.Item>
+                        <Descriptions.Item label={t('settings.backup.restoreConfirmPlatform')}>{meta.platform || '-'}</Descriptions.Item>
+                        <Descriptions.Item label={t('settings.backup.restoreConfirmArchiveFormat')}>{String(meta.archiveFormatVersion)}</Descriptions.Item>
+                      </Descriptions>
+                      <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
+                        {t('settings.backup.restoreStaged')}
+                      </Typography.Paragraph>
+                      <Space>
+                        <Button type="primary" onClick={() => { message.destroy(key); resolve(true); }}>{t('settings.backup.restoreConfirmApplyButton')}</Button>
+                        <Button onClick={() => { message.destroy(key); resolve(false); }}>{t('common.cancel')}</Button>
+                      </Space>
+                    </div>
+                  );
+                  message.open({ key, type: 'info', content, duration: 0 });
+                });
+                if (!confirmed) return;
+                const staged = await stageRestoreArchive(path);
+                if (staged.requiresRestart) {
+                  message.success(t('settings.backup.restoreStaged'));
+                  await quitApp();
+                }
+              } catch (e: any) {
+                const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
+                message.error(msg || t('settings.backup.restoreStageError'));
+              }
+            }}
+          >
+            {t('setup.restore.button')}
+          </Button>
+        </Space>
+      </Card>
       <div style={{ marginBottom: 24 }}>
         <h2 style={{ margin: 0 }}>{t('settings.companyCard')}</h2>
       </div>

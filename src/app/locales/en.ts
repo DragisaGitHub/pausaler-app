@@ -411,7 +411,7 @@ export const en = {
       restoreTitle: 'Restore Backup',
       restoreButton: 'Select backup…',
       restoreHelp: 'Stage a restore safely and apply it on next launch.',
-      restoreConfirmApplyButton: 'Restore & restart',
+      restoreConfirmApplyButton: 'Restore & close',
       restoreConfirmCreatedAt: 'Created At',
       restoreConfirmAppVersion: 'App Version',
       restoreConfirmPlatform: 'Platform',
@@ -419,6 +419,13 @@ export const en = {
       restoreStaged: 'Restore staged. The app will exit now. Start it again to apply the restore.',
       restoreStageError: 'Failed to stage restore',
       restoreAppliedSuccess: 'Backup restore applied successfully.',
+    },
+  },
+  setup: {
+    restore: {
+      title: 'Restore from backup',
+      help: 'If you already have a backup file, you can restore your data now and skip setup.',
+      button: 'Restore from backup…',
     },
   },
   overview: {

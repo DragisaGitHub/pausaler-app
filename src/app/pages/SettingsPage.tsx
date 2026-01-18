@@ -502,6 +502,9 @@ export function SettingsPage() {
                                     <Descriptions.Item label={t('settings.backup.restoreConfirmPlatform')}>{meta.platform || '-'}</Descriptions.Item>
                                     <Descriptions.Item label={t('settings.backup.restoreConfirmArchiveFormat')}>{String(meta.archiveFormatVersion)}</Descriptions.Item>
                                   </Descriptions>
+                                  <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
+                                    {t('settings.backup.restoreStaged')}
+                                  </Typography.Paragraph>
                                   <Space>
                                     <Button type="primary" onClick={() => { message.destroy(key); resolve(true); }}>{t('settings.backup.restoreConfirmApplyButton')}</Button>
                                     <Button onClick={() => { message.destroy(key); resolve(false); }}>{t('common.cancel')}</Button>

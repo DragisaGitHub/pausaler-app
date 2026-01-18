@@ -22,7 +22,6 @@ use lettre::{SmtpTransport, Transport};
 use zip::{write::FileOptions, ZipArchive, ZipWriter};
 
 mod license;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BackupMetadataJson {
@@ -1455,16 +1454,16 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
             let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
             let img = printpdf::image_crate::load_from_memory(&bytes).ok()?;
             Some(img)
-        });
+        })
+        ;
 
-    let has_logo = decoded_logo.is_some();
-    let row1_top_y = y;
-    let row1_text_right_x = if has_logo {
-        (content_right_x - LOGO_AREA_W).max(content_left_x + 20.0)
+    let row1_text_right_x = if decoded_logo.is_some() {
+        (content_right_x - LOGO_AREA_W - LOGO_GAP).max(content_left_x)
     } else {
         content_right_x
     };
     let row1_text_w_mm = (row1_text_right_x - content_left_x).max(10.0);
+    let row1_top_y = y;
 
     let company_address_line = payload.company.address_line.as_deref().unwrap_or("").trim();
     let company_postal_code = payload.company.postal_code.as_deref().unwrap_or("").trim();
@@ -2492,6 +2491,29 @@ fn resolve_db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .into_iter()
         .next()
         .ok_or_else(|| "Unable to resolve database path".to_string())
+}
+
+fn remove_if_exists(path: &std::path::Path) -> std::io::Result<()> {
+    if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn wal_path(db_path: &std::path::Path) -> PathBuf {
+    let name = db_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "pausaler.db".to_string());
+    db_path.with_file_name(format!("{}-wal", name))
+}
+
+fn shm_path(db_path: &std::path::Path) -> PathBuf {
+    let name = db_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "pausaler.db".to_string());
+    db_path.with_file_name(format!("{}-shm", name))
 }
 
 fn configure_sqlite(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -4351,29 +4373,122 @@ pub fn run() {
             let handle = app.handle();
             {
                 let root = resolve_app_data_root(&handle)?;
+                if let Ok(dir) = handle.path().app_data_dir() {
+                    println!("Startup: app_data_dir = {}", dir.display());
+                } else {
+                    println!("Startup: app_data_dir = <unavailable>");
+                }
+                let db_path = resolve_db_path(&handle)?;
+                println!("Startup: db_path = {}", db_path.display());
+                let db_wal = wal_path(&db_path);
+                let db_shm = shm_path(&db_path);
+                println!(
+                    "Startup: wal_path = {} (exists={}, size={} bytes)",
+                    db_wal.display(),
+                    db_wal.exists(),
+                    db_wal.metadata().map(|m| m.len()).unwrap_or(0)
+                );
+                println!(
+                    "Startup: shm_path = {} (exists={}, size={} bytes)",
+                    db_shm.display(),
+                    db_shm.exists(),
+                    db_shm.metadata().map(|m| m.len()).unwrap_or(0)
+                );
                 let restore_dir = root.join("restore");
                 let plan_path = restore_dir.join("restore-plan.json");
+                println!("Startup: plan_path = {} (exists={})", plan_path.display(), plan_path.exists());
                 if plan_path.exists() {
-                    let db_path = resolve_db_path(&handle)?;
+                    println!("Restore plan detected");
                     let ts = OffsetDateTime::now_utc();
                     let suffix = ts.format(&time::macros::format_description!("[year][month][day]-[hour][minute][second]")).unwrap_or_else(|_| "backup".to_string());
                     let backup_path = db_path.with_file_name(format!("pausaler.db.bak-{}", suffix));
-                    if db_path.exists() { let _ = fs::copy(&db_path, &backup_path); }
+                    if db_path.exists() {
+                        println!("Restore: backup current db -> {}", backup_path.display());
+                        if let Err(e) = fs::copy(&db_path, &backup_path) { eprintln!("Restore failed to backup current DB: {}", e); }
+                    }
 
                     let plan_json = std::fs::read_to_string(&plan_path).unwrap_or_default();
                     let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap_or(serde_json::json!({}));
                     let staged_db = PathBuf::from(plan.get("stagedDbPath").and_then(|v| v.as_str()).unwrap_or(""));
                     let staged_assets = PathBuf::from(plan.get("stagedAssetsPath").and_then(|v| v.as_str()).unwrap_or(""));
+                    let staged_db_exists = staged_db.exists();
+                    let staged_db_size = staged_db.metadata().map(|m| m.len()).unwrap_or(0);
+                    println!(
+                        "Startup: staged_db = {} (exists={}, size={} bytes)",
+                        staged_db.display(),
+                        staged_db_exists,
+                        staged_db_size
+                    );
 
-                    if staged_db.exists() { let _ = std::fs::rename(&staged_db, &db_path); }
-                    if staged_assets.exists() {
-                        let dest_assets = root.join("assets");
-                        let _ = copy_dir_recursive(&staged_assets, &dest_assets);
+                    // Remove WAL/SHM before replacing DB to avoid stale state overriding restored DB
+                    println!("Restore: Deleting WAL/SHM before replacement");
+                    if let Err(e) = remove_if_exists(&db_wal) { eprintln!("Restore: failed to delete WAL: {}", e); }
+                    if let Err(e) = remove_if_exists(&db_shm) { eprintln!("Restore: failed to delete SHM: {}", e); }
+
+                    let mut applied_ok = false;
+                    if staged_db.exists() {
+                        println!("Restore: replace db {} -> {}", staged_db.display(), db_path.display());
+                        println!("Replacing DB atomically via temp file");
+                        // Copy staged DB to a temp file in target directory, then rename over existing DB
+                        let target_dir = db_path.parent().map(|p| p.to_path_buf()).unwrap_or(root.clone());
+                        let tmp_path = target_dir.join(".pausaler.db.tmp");
+                        if tmp_path.exists() { let _ = std::fs::remove_file(&tmp_path); }
+                        match std::fs::copy(&staged_db, &tmp_path) {
+                            Ok(_) => {
+                                if db_path.exists() {
+                                    if let Err(e) = std::fs::remove_file(&db_path) {
+                                        eprintln!("Restore failed removing existing DB: {}", e);
+                                    }
+                                }
+                                match std::fs::rename(&tmp_path, &db_path) {
+                                    Ok(_) => {
+                                        // Ensure there are NO stale WAL/SHM left for target DB
+                                        let _ = remove_if_exists(&db_wal);
+                                        let _ = remove_if_exists(&db_shm);
+                                        println!(
+                                            "Post-replace: wal exists={} | shm exists={}",
+                                            db_wal.exists(), db_shm.exists()
+                                        );
+                                        applied_ok = true;
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Restore failed renaming temp DB into place: {}", e);
+                                        eprintln!("Restore NOT applied");
+                                        applied_ok = false;
+                                        let _ = std::fs::remove_file(&tmp_path);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Restore failed copying staged DB to temp: {}", e);
+                                eprintln!("Restore NOT applied");
+                                applied_ok = false;
+                            }
+                        }
+                    } else {
+                        eprintln!("Restore failed: staged DB not found");
+                        eprintln!("Restore NOT applied");
                     }
-                    let _ = std::fs::remove_file(&plan_path);
-                    let _ = std::fs::remove_dir_all(root.join("restore_stage"));
-                    let _ = handle.emit("restore_applied", serde_json::json!({ "ok": true }));
+
+                    if applied_ok && staged_assets.exists() {
+                        let dest_assets = root.join("assets");
+                        println!("Restore: copy assets {} -> {}", staged_assets.display(), dest_assets.display());
+                        if let Err(e) = copy_dir_recursive(&staged_assets, &dest_assets) {
+                            eprintln!("Restore failed copying assets: {}", e);
+                            eprintln!("Restore NOT applied");
+                            applied_ok = false;
+                        }
+                    }
+
+                    if applied_ok {
+                        let _ = std::fs::remove_file(&plan_path);
+                        let _ = std::fs::remove_dir_all(root.join("restore_stage"));
+                        let _ = handle.emit("restore_applied", serde_json::json!({ "ok": true }));
+                        println!("Restore: cleanup (plan+staging removed)");
+                        println!("Restore applied successfully");
+                    }
                 }
+                println!("Continuing normal startup");
             }
             let db = DbState::new(&handle)?;
             app.manage(db);
@@ -5017,34 +5132,71 @@ async fn inspect_backup_archive(archive_path: String) -> Result<BackupMetadataRe
 
 #[tauri::command]
 async fn create_backup_archive(app: tauri::AppHandle, dest_path: String) -> Result<BackupResult, String> {
+    // Resolve destination and ensure parent exists
     let dest = PathBuf::from(dest_path);
     let parent = dest.parent().ok_or_else(|| "Invalid destination path".to_string())?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
 
-    let db_path = resolve_db_path(&app)?;
-    if !db_path.exists() { return Err("Database file not found".to_string()); }
-    let app_root = resolve_app_data_root(&app)?;
-    let assets_dir = app_root.join("assets");
+    // Resolve app_data_dir strictly from current runtime
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app_data_dir: {}", e))?;
+    let db_path = app_data_dir.join("pausaler.db");
+
+    // Diagnostics before zipping
+    println!("Backup: app_data_dir = {}", app_data_dir.display());
+    println!("Backup: db_path = {}", db_path.display());
+    let db_meta = fs::metadata(&db_path).ok();
+    let db_exists = db_meta.is_some();
+    let db_size = db_meta.map(|m| m.len()).unwrap_or(0);
+    println!("Backup: db exists = {}, size = {} bytes", db_exists, db_size);
+    println!("Backup: dest_archive = {}", dest.display());
+
+    // Safety guards
+    if !db_exists {
+        return Err(format!("No database found at {}", db_path.display()));
+    }
+    const DB_SUSPICIOUS_MIN_SIZE_BYTES: u64 = 200 * 1024; // 200KB
+    if db_size < DB_SUSPICIOUS_MIN_SIZE_BYTES {
+        return Err(format!(
+            "Database appears too small ({} bytes) at {}. Backup aborted.",
+            db_size,
+            db_path.display()
+        ));
+    }
+
+    // Force WAL changes into main DB before zipping
+    println!("Backup: checkpoint(TRUNCATE) start");
+    {
+        let conn = rusqlite::Connection::open(&db_path).map_err(|e| format!("Failed to open DB for checkpoint: {}", e))?;
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);").map_err(|e| format!("Checkpoint(TRUNCATE) failed: {}", e))?;
+        // conn dropped at end of scope
+    }
+    println!("Backup: checkpoint(TRUNCATE) ok");
+
+    // Re-evaluate DB size after checkpoint
+    let db_size_after = fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+    println!("Backup: db size after checkpoint = {} bytes", db_size_after);
 
     let mut total_bytes: u64 = 0;
-    total_bytes = total_bytes.saturating_add(fs::metadata(&db_path).map_err(|e| e.to_string())?.len());
-    if assets_dir.exists() { total_bytes = total_bytes.saturating_add(compute_dir_size(&assets_dir)); }
-    let max_bytes: u64 = 500 * 1024 * 1024;
-    if total_bytes > max_bytes { return Err("Backup size exceeds 500MB limit".to_string()); }
-
-    let tmp_path = parent.join(".pausaler-backup.tmp");
-    if tmp_path.exists() { let _ = fs::remove_file(&tmp_path); }
-
-    let f = std::fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
-    let mut zip = ZipWriter::new(f);
-    let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    use std::io::Write as _;
-
-    let pi = app.package_info();
-    let meta = BackupMetadataJson {
-        app_name: pi.name.clone(),
-        app_version: pi.version.to_string(),
-        created_at: now_iso_basic(),
+    total_bytes = total_bytes.saturating_add(db_size_after);
+        while let Some(cur) = stack.pop() {
+            if let Ok(entries) = std::fs::read_dir(&cur) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if let Ok(meta) = entry.metadata() {
+                        if meta.is_dir() {
+                            stack.push(path);
+                        } else {
+                            total = total.saturating_add(meta.len());
+                        }
+                    }
+                }
+            }
+        }
+        total
+    }
         platform: std::env::consts::OS.to_string(),
         schema_version: Some(8),
         archive_format_version: 1,
@@ -5059,25 +5211,7 @@ async fn create_backup_archive(app: tauri::AppHandle, dest_path: String) -> Resu
         std::io::copy(&mut db_file, &mut zip).map_err(|e| e.to_string())?;
     }
 
-    if assets_dir.exists() {
-        let mut stack: Vec<PathBuf> = vec![assets_dir.clone()];
-        while let Some(cur) = stack.pop() {
-            for entry in fs::read_dir(&cur).map_err(|e| e.to_string())? {
-                let entry = entry.map_err(|e| e.to_string())?;
-                let path = entry.path();
-                let rel = path.strip_prefix(&app_root).unwrap_or(&path);
-                let rel_str = rel.to_string_lossy().replace('\\', "/");
-                let meta = entry.metadata().map_err(|e| e.to_string())?;
-                if meta.is_dir() {
-                    stack.push(path);
-                } else {
-                    zip.start_file(rel_str, options).map_err(|e| e.to_string())?;
-                    let mut rf = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-                    std::io::copy(&mut rf, &mut zip).map_err(|e| e.to_string())?;
-                }
-            }
-        }
-    }
+    // Option A: backup contains ONLY pausaler.db (no -wal/-shm, no assets)
 
     zip.finish().map_err(|e| e.to_string())?;
     let size_bytes = fs::metadata(&tmp_path).map_err(|e| e.to_string())?.len();
