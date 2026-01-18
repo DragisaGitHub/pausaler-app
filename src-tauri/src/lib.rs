@@ -8,7 +8,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use std::io::Cursor;
+use std::io::{Cursor, Write};
 use std::sync::OnceLock;
 
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
@@ -4248,23 +4248,6 @@ fn now_iso_basic() -> String {
     OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_else(|_| "".to_string())
 }
 
-fn compute_dir_size(root: &PathBuf) -> u64 {
-    let mut total: u64 = 0;
-    let mut stack: Vec<PathBuf> = vec![root.clone()];
-    while let Some(p) = stack.pop() {
-        if let Ok(meta) = fs::metadata(&p) {
-            if meta.is_file() {
-                total = total.saturating_add(meta.len());
-            } else if meta.is_dir() {
-                if let Ok(rd) = fs::read_dir(&p) {
-                    for e in rd.flatten() { stack.push(e.path()); }
-                }
-            }
-        }
-    }
-    total
-}
-
 fn copy_dir_recursive(src: &PathBuf, dest: &PathBuf) -> Result<(), String> {
     if !src.exists() { return Ok(()); }
     fs::create_dir_all(dest).map_err(|e| e.to_string())?;
@@ -5179,37 +5162,29 @@ async fn create_backup_archive(app: tauri::AppHandle, dest_path: String) -> Resu
     let db_size_after = fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
     println!("Backup: db size after checkpoint = {} bytes", db_size_after);
 
-    let mut total_bytes: u64 = 0;
-    total_bytes = total_bytes.saturating_add(db_size_after);
-        while let Some(cur) = stack.pop() {
-            if let Ok(entries) = std::fs::read_dir(&cur) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if let Ok(meta) = entry.metadata() {
-                        if meta.is_dir() {
-                            stack.push(path);
-                        } else {
-                            total = total.saturating_add(meta.len());
-                        }
-                    }
-                }
-            }
-        }
-        total
-    }
+    // Prepare temp path and zip options
+    let tmp_path = parent.join(".pausaler-backup.tmp");
+    if tmp_path.exists() { let _ = fs::remove_file(&tmp_path); }
+    let f = std::fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
+    let mut zip = ZipWriter::new(f);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+    let pi = app.package_info();
+    let meta = BackupMetadataJson {
+        app_name: pi.name.clone(),
+        app_version: pi.version.to_string(),
+        created_at: now_iso_basic(),
         platform: std::env::consts::OS.to_string(),
         schema_version: Some(8),
         archive_format_version: 1,
     };
     let meta_json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
     zip.start_file("metadata.json", options).map_err(|e| e.to_string())?;
-    zip.write_all(&meta_json).map_err(|e| e.to_string())?;
+    zip.write_all(&meta_json).map_err(|e: std::io::Error| e.to_string())?;
 
-    {
-        let mut db_file = std::fs::File::open(&db_path).map_err(|e| e.to_string())?;
-        zip.start_file("pausaler.db", options).map_err(|e| e.to_string())?;
-        std::io::copy(&mut db_file, &mut zip).map_err(|e| e.to_string())?;
-    }
+    let mut db_file = std::fs::File::open(&db_path).map_err(|e| e.to_string())?;
+    zip.start_file("pausaler.db", options).map_err(|e| e.to_string())?;
+    std::io::copy(&mut db_file, &mut zip).map_err(|e| e.to_string())?;
 
     // Option A: backup contains ONLY pausaler.db (no -wal/-shm, no assets)
 
