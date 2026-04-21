@@ -116,5 +116,23 @@ export interface ExpenseRange {
   to?: string;
 }
 
+export const OFFER_STATUS_VALUES = ['DRAFT', 'SENT', 'FAILED'] as const;
+export type OfferStatus = (typeof OFFER_STATUS_VALUES)[number];
+
+export interface Offer {
+  id: string;
+  clientEmail: string;
+  clientName: string;
+  subject: string;
+  body: string;
+  amount: number;
+  currency: string;
+  validUntil: string;
+  status: OfferStatus;
+  createdAt: string;
+  sentAt?: string | null;
+  failedReason?: string | null;
+}
+
 export const CURRENCY_VALUES = ['RSD', 'EUR', 'USD'] as const;
 export type CurrencyCode = (typeof CURRENCY_VALUES)[number];

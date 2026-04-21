@@ -22,6 +22,11 @@ use lettre::{SmtpTransport, Transport};
 use zip::{write::FileOptions, ZipArchive, ZipWriter};
 
 mod license;
+mod offers;
+use offers::{
+    create_offer, delete_offer, get_all_offers, get_offer_by_id, send_offer_email,
+    update_offer,
+};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BackupMetadataJson {
@@ -1139,40 +1144,6 @@ fn fill_rect_gray(
     layer.add_rect(rect);
     // reset fill to black
     layer.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
-}
-
-#[allow(dead_code)]
-fn push_kv_wrapped(
-    layer: &printpdf::PdfLayerReference,
-    font: &printpdf::IndirectFontRef,
-    label: &str,
-    value: &str,
-    font_size: f32,
-    x_label: f32,
-    x_value: f32,
-    y: f32,
-    max_value_chars: usize,
-    line_gap: f32,
-) -> f32 {
-    let value = value.trim();
-    let value_lines = if value.is_empty() {
-        vec![String::new()]
-    } else {
-        wrap_text_lines(value, max_value_chars)
-    };
-
-    // First line: label + first value line
-    push_line(layer, font, &format!("{}:", label), font_size, x_label, y);
-    push_line(layer, font, &value_lines[0], font_size, x_value, y);
-
-    // Continuation lines: value only, aligned to value column
-    let mut current_y = y;
-    for line in value_lines.iter().skip(1) {
-        current_y -= line_gap;
-        push_line(layer, font, line, font_size, x_value, current_y);
-    }
-
-    current_y
 }
 
 fn wrap_text_by_width_mm(
@@ -2603,10 +2574,29 @@ fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
             createdAt TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS offers (
+            id TEXT PRIMARY KEY NOT NULL,
+            clientEmail TEXT NOT NULL,
+            clientName TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            body TEXT NOT NULL,
+            amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            validUntil TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'DRAFT',
+            createdAt TEXT NOT NULL,
+            sentAt TEXT,
+            failedReason TEXT,
+            data_json TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_invoices_invoiceNumber ON invoices(invoiceNumber);
         CREATE INDEX IF NOT EXISTS idx_invoices_clientId ON invoices(clientId);
         CREATE INDEX IF NOT EXISTS idx_clients_name ON clients(name);
         CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date);
+        CREATE INDEX IF NOT EXISTS idx_offers_createdAt ON offers(createdAt);
+        CREATE INDEX IF NOT EXISTS idx_offers_status ON offers(status);
+        CREATE INDEX IF NOT EXISTS idx_offers_clientEmail ON offers(clientEmail);
         "#,
     )?;
     Ok(())
@@ -2632,15 +2622,13 @@ fn app_meta_set(conn: &Connection, key: &str, value: &str) -> Result<(), rusqlit
 fn apply_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     let mut v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
 
-    // Legacy baseline version was 2.
     if v > 0 && v < 2 {
         conn.execute_batch("PRAGMA user_version = 2;")?;
         v = 2;
     }
 
-    // v=0 typically means a fresh DB (init_schema created the latest tables).
     if v == 0 {
-        conn.execute_batch("PRAGMA user_version = 8;")?;
+        conn.execute_batch("PRAGMA user_version = 9;")?;
         return Ok(());
     }
 
@@ -2694,7 +2682,6 @@ fn apply_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     }
 
     if v < 7 {
-        // Nullable columns for older DBs; UI + PDF validation enforce that MB is filled.
         conn.execute_batch(
             "ALTER TABLE settings ADD COLUMN maticniBroj TEXT;\n\
              ALTER TABLE clients ADD COLUMN maticniBroj TEXT;\n\
@@ -2715,6 +2702,31 @@ fn apply_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
                  ELSE companyAddressLine\n\
              END;\n\
              PRAGMA user_version = 8;\n",
+        )?;
+        v = 8;
+    }
+
+    if v < 9 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS offers (\n\
+                id TEXT PRIMARY KEY NOT NULL,\n\
+                clientEmail TEXT NOT NULL,\n\
+                clientName TEXT NOT NULL,\n\
+                subject TEXT NOT NULL,\n\
+                body TEXT NOT NULL,\n\
+                amount REAL NOT NULL,\n\
+                currency TEXT NOT NULL,\n\
+                validUntil TEXT NOT NULL,\n\
+                status TEXT NOT NULL DEFAULT 'DRAFT',\n\
+                createdAt TEXT NOT NULL,\n\
+                sentAt TEXT,\n\
+                failedReason TEXT,\n\
+                data_json TEXT NOT NULL\n\
+            );\n\
+             CREATE INDEX IF NOT EXISTS idx_offers_createdAt ON offers(createdAt);\n\
+             CREATE INDEX IF NOT EXISTS idx_offers_status ON offers(status);\n\
+             CREATE INDEX IF NOT EXISTS idx_offers_clientEmail ON offers(clientEmail);\n\
+             PRAGMA user_version = 9;\n",
         )?;
     }
 
@@ -4512,6 +4524,12 @@ pub fn run() {
             create_client,
             update_client,
             delete_client,
+            get_all_offers,
+            get_offer_by_id,
+            create_offer,
+            update_offer,
+            delete_offer,
+            send_offer_email,
             get_all_invoices,
             list_invoices_range,
             get_invoice_by_id,
@@ -5175,7 +5193,7 @@ async fn create_backup_archive(app: tauri::AppHandle, dest_path: String) -> Resu
         app_version: pi.version.to_string(),
         created_at: now_iso_basic(),
         platform: std::env::consts::OS.to_string(),
-        schema_version: Some(8),
+        schema_version: Some(9),
         archive_format_version: 1,
     };
     let meta_json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;

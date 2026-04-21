@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 
 import type { StorageAdapter } from './storageAdapter';
 import { normalizeInvoiceUnit } from '../types';
-import type { Client, Expense, ExpenseRange, Invoice, Settings } from '../types';
+import type { Client, Expense, ExpenseRange, Invoice, Offer, Settings } from '../types';
 
 type NewInvoice = {
   clientId: string;
@@ -137,6 +137,29 @@ export function createSqliteStorageAdapter(): StorageAdapter {
 
     deleteExpense: async (id: string): Promise<boolean> =>
       invokeLogged<boolean>('deleteExpense', 'delete_expense', { id }),
+
+    // Offers
+    getAllOffers: async (): Promise<Offer[]> =>
+      invokeLogged<Offer[]>('getAllOffers', 'get_all_offers'),
+
+    getOfferById: async (id: string): Promise<Offer | undefined> => {
+      const res = await invokeLogged<Offer | null>('getOfferById', 'get_offer_by_id', { id });
+      return res ?? undefined;
+    },
+
+    createOffer: async (data: Omit<Offer, 'id' | 'createdAt'>): Promise<Offer> =>
+      invokeLogged<Offer>('createOffer', 'create_offer', { input: data }),
+
+    updateOffer: async (id: string, patch: Partial<Omit<Offer, 'id' | 'createdAt'>>): Promise<Offer | null> => {
+      const res = await invokeLogged<Offer | null>('updateOffer', 'update_offer', { id, patch });
+      return res ?? null;
+    },
+
+    deleteOffer: async (id: string): Promise<boolean> =>
+      invokeLogged<boolean>('deleteOffer', 'delete_offer', { id }),
+
+    sendOfferEmail: async (input: { offerId: string }): Promise<boolean> =>
+      invokeLogged<boolean>('sendOfferEmail', 'send_offer_email', { input }),
 
     // Exports
     exportInvoicesCsv: async (from: string, to: string, outputPath: string): Promise<string> =>
