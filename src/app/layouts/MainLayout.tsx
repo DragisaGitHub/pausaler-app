@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Alert, Layout, Menu, theme } from 'antd';
-import { FileTextOutlined, UserOutlined, SettingOutlined, FlagOutlined, DashboardOutlined, BarChartOutlined, DollarOutlined, ExportOutlined, FileSearchOutlined, SafetyCertificateOutlined, GlobalOutlined } from '@ant-design/icons';
+import { FileTextOutlined, UserOutlined, SettingOutlined, FlagOutlined, DashboardOutlined, BarChartOutlined, DollarOutlined, ExportOutlined, FileSearchOutlined, SafetyCertificateOutlined, GlobalOutlined, MailOutlined } from '@ant-design/icons';
 import { Link, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { TitleBar } from '../components/TitleBar';
@@ -24,7 +24,11 @@ export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
     return <Navigate to="/setup" replace />;
   }
 
-  const selectedKey = location.pathname.startsWith('/invoices/') ? '/' : location.pathname;
+  const selectedKey = location.pathname.startsWith('/invoices/')
+    ? '/'
+    : location.pathname.startsWith('/offers/')
+      ? '/offers'
+      : location.pathname;
 
   const menuItems = [
     {
@@ -44,6 +48,12 @@ export function MainLayout({ needsSetup = false }: { needsSetup?: boolean }) {
       icon: <DollarOutlined />,
       disabled: needsSetup,
       label: needsSetup ? <span>{t('nav.expenses')}</span> : <Link to="/expenses">{t('nav.expenses')}</Link>,
+    },
+    {
+      key: '/offers',
+      icon: <MailOutlined />,
+      disabled: needsSetup,
+      label: needsSetup ? <span>{t('nav.offers')}</span> : <Link to="/offers">{t('nav.offers')}</Link>,
     },
     {
       key: '/reports',

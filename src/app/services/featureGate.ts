@@ -5,9 +5,11 @@ export type Feature =
   | 'VIEW_DATA'
   | 'CLIENTS_WRITE'
   | 'EXPENSES_WRITE'
+  | 'OFFERS_WRITE'
   | 'INVOICES_WRITE'
   | 'INVOICES_EXPORT_PDF'
   | 'INVOICES_SEND_EMAIL'
+  | 'OFFERS_SEND_EMAIL'
   | 'EXPORTS_CSV'
   | 'SETTINGS_WRITE';
 
@@ -19,9 +21,11 @@ const MATRIX: FeatureMatrix = {
     VIEW_DATA: true,
     CLIENTS_WRITE: true,
     EXPENSES_WRITE: true,
+    OFFERS_WRITE: true,
     INVOICES_WRITE: true,
     INVOICES_EXPORT_PDF: true,
     INVOICES_SEND_EMAIL: true,
+    OFFERS_SEND_EMAIL: true,
     EXPORTS_CSV: true,
     SETTINGS_WRITE: true,
   },
@@ -30,9 +34,11 @@ const MATRIX: FeatureMatrix = {
     VIEW_DATA: true,
     CLIENTS_WRITE: false,
     EXPENSES_WRITE: false,
+    OFFERS_WRITE: false,
     INVOICES_WRITE: false,
     INVOICES_EXPORT_PDF: false,
     INVOICES_SEND_EMAIL: false,
+    OFFERS_SEND_EMAIL: false,
     EXPORTS_CSV: false,
     SETTINGS_WRITE: false,
   },
@@ -41,9 +47,11 @@ const MATRIX: FeatureMatrix = {
     VIEW_DATA: false,
     CLIENTS_WRITE: false,
     EXPENSES_WRITE: false,
+    OFFERS_WRITE: false,
     INVOICES_WRITE: false,
     INVOICES_EXPORT_PDF: false,
     INVOICES_SEND_EMAIL: false,
+    OFFERS_SEND_EMAIL: false,
     EXPORTS_CSV: false,
     SETTINGS_WRITE: false,
   },
