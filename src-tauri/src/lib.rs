@@ -1,31 +1,30 @@
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
-use tauri::Emitter;
-use tauri::path::BaseDirectory;
+use std::io::{Cursor, Write};
+use std::sync::OnceLock;
 use std::{
     fs,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
 };
-use std::io::{Cursor, Write};
-use std::sync::OnceLock;
+use tauri::path::BaseDirectory;
+use tauri::Emitter;
+use tauri::Manager;
 
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
 use lettre::message::{header::ContentType, Attachment, Mailbox, Message, MultiPart, SinglePart};
-use lettre::transport::smtp::client::{Tls, TlsParameters};
 use lettre::transport::smtp::authentication::Credentials;
+use lettre::transport::smtp::client::{Tls, TlsParameters};
 use lettre::{SmtpTransport, Transport};
 use zip::{write::FileOptions, ZipArchive, ZipWriter};
 
 mod license;
 mod offers;
 use offers::{
-    create_offer, delete_offer, get_all_offers, get_offer_by_id, send_offer_email,
-    update_offer,
+    create_offer, delete_offer, get_all_offers, get_offer_by_id, send_offer_email, update_offer,
 };
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -125,8 +124,9 @@ static INVOICE_EMAIL_LABELS: OnceLock<Result<InvoiceEmailLabelsFile, String>> = 
 fn invoice_email_labels(lang: &str) -> Result<InvoiceEmailLabelsLocale, String> {
     let file = INVOICE_EMAIL_LABELS.get_or_init(|| {
         let json = include_str!("../../src/shared/invoiceEmailLabels.json");
-        serde_json::from_str::<InvoiceEmailLabelsFile>(json)
-            .map_err(|e| format!("Failed to parse embedded src/shared/invoiceEmailLabels.json: {e}"))
+        serde_json::from_str::<InvoiceEmailLabelsFile>(json).map_err(|e| {
+            format!("Failed to parse embedded src/shared/invoiceEmailLabels.json: {e}")
+        })
     });
 
     let file = file.as_ref().map_err(|e| e.clone())?;
@@ -221,7 +221,11 @@ fn sanitize_filename(input: &str) -> String {
         out.push(if ok { ch } else { '_' });
     }
     let trimmed = out.trim().to_string();
-    if trimmed.is_empty() { "invoice".to_string() } else { trimmed }
+    if trimmed.is_empty() {
+        "invoice".to_string()
+    } else {
+        trimmed
+    }
 }
 
 fn format_money(v: f64) -> String {
@@ -319,12 +323,20 @@ fn resolve_serbia_zip_codes_path(app: &tauri::AppHandle) -> Vec<PathBuf> {
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("assets").join("data").join("serbia_zip_codes.json"));
+            candidates.push(
+                dir.join("assets")
+                    .join("data")
+                    .join("serbia_zip_codes.json"),
+            );
         }
     }
 
     if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("assets").join("data").join("serbia_zip_codes.json"));
+        candidates.push(
+            cwd.join("assets")
+                .join("data")
+                .join("serbia_zip_codes.json"),
+        );
         candidates.push(
             cwd.join("src-tauri")
                 .join("assets")
@@ -338,13 +350,16 @@ fn resolve_serbia_zip_codes_path(app: &tauri::AppHandle) -> Vec<PathBuf> {
 
 fn load_serbia_zip_codes_from_disk(app: &tauri::AppHandle) -> Result<Vec<SerbiaCityDto>, String> {
     let candidates = resolve_serbia_zip_codes_path(app);
-    let path = candidates
-        .into_iter()
-        .find(|p| p.exists())
-        .ok_or_else(|| "Unable to locate serbia_zip_codes.json (bundle resource missing?)".to_string())?;
+    let path = candidates.into_iter().find(|p| p.exists()).ok_or_else(|| {
+        "Unable to locate serbia_zip_codes.json (bundle resource missing?)".to_string()
+    })?;
 
-    let json = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read serbia_zip_codes.json at {}: {e}", path.display()))?;
+    let json = fs::read_to_string(&path).map_err(|e| {
+        format!(
+            "Failed to read serbia_zip_codes.json at {}: {e}",
+            path.display()
+        )
+    })?;
 
     let mut rows = serde_json::from_str::<Vec<SerbiaZipCodeRaw>>(&json)
         .map_err(|e| format!("Failed to parse serbia_zip_codes.json: {e}"))?
@@ -356,7 +371,11 @@ fn load_serbia_zip_codes_from_disk(app: &tauri::AppHandle) -> Result<Vec<SerbiaC
         .filter(|r| !r.city.trim().is_empty() && !r.postal_code.trim().is_empty())
         .collect::<Vec<_>>();
 
-    rows.sort_by(|a, b| a.city.cmp(&b.city).then_with(|| a.postal_code.cmp(&b.postal_code)));
+    rows.sort_by(|a, b| {
+        a.city
+            .cmp(&b.city)
+            .then_with(|| a.postal_code.cmp(&b.postal_code))
+    });
     Ok(rows)
 }
 
@@ -368,7 +387,10 @@ fn serbia_zip_codes(app: &tauri::AppHandle) -> Result<&'static Vec<SerbiaCityDto
 }
 
 #[tauri::command]
-fn list_serbia_cities(app: tauri::AppHandle, search: Option<String>) -> Result<Vec<SerbiaCityDto>, String> {
+fn list_serbia_cities(
+    app: tauri::AppHandle,
+    search: Option<String>,
+) -> Result<Vec<SerbiaCityDto>, String> {
     let rows = serbia_zip_codes(&app)?;
     let q = search
         .as_deref()
@@ -420,12 +442,20 @@ fn render_invoice_email(
 
     let invoice_number = invoice.invoice_number.trim();
     let issue_date = invoice.issue_date.trim();
-    let due_date = invoice.due_date.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let due_date = invoice
+        .due_date
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let total = format_money(invoice.total);
     let currency = invoice.currency.trim();
 
     let company_name = settings.company_name.trim();
-    let company_name = if company_name.is_empty() { "-" } else { company_name };
+    let company_name = if company_name.is_empty() {
+        "-"
+    } else {
+        company_name
+    };
 
     let company_address_line = settings.company_address_line.trim();
     let company_postal_code = settings.company_postal_code.trim();
@@ -435,8 +465,12 @@ fn render_invoice_email(
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
-    let company_address = if !company_address_line.is_empty() && !company_postal_and_city.is_empty() {
-        Some(format!("{}, {}", company_address_line, company_postal_and_city))
+    let company_address = if !company_address_line.is_empty() && !company_postal_and_city.is_empty()
+    {
+        Some(format!(
+            "{}, {}",
+            company_address_line, company_postal_and_city
+        ))
     } else if !company_address_line.is_empty() {
         Some(company_address_line.to_string())
     } else if !company_postal_and_city.is_empty() {
@@ -930,7 +964,11 @@ fn pdf_labels(lang: &str) -> PdfLabels {
     });
 
     let l = lang.to_ascii_lowercase();
-    let loc = if l.starts_with("en") { &file.en } else { &file.sr };
+    let loc = if l.starts_with("en") {
+        &file.en
+    } else {
+        &file.sr
+    };
 
     PdfLabels {
         doc_title: loc.doc_title.clone(),
@@ -969,10 +1007,14 @@ fn pdf_labels(lang: &str) -> PdfLabels {
         payment_method: loc.payment_method.clone(),
         notes: loc.notes.clone(),
         legal_notes_title: loc.legal_notes_title.clone(),
-        err_company_registration_number_missing: loc.err_company_registration_number_missing.clone(),
+        err_company_registration_number_missing: loc
+            .err_company_registration_number_missing
+            .clone(),
         err_client_registration_number_missing: loc.err_client_registration_number_missing.clone(),
         err_not_enough_space_header_and_footer: loc.err_not_enough_space_header_and_footer.clone(),
-        err_not_enough_space_content_and_footer: loc.err_not_enough_space_content_and_footer.clone(),
+        err_not_enough_space_content_and_footer: loc
+            .err_not_enough_space_content_and_footer
+            .clone(),
         err_too_many_items: loc.err_too_many_items.clone(),
         err_missing_language: loc.err_missing_language.clone(),
         err_invalid_language: loc.err_invalid_language.clone(),
@@ -1244,12 +1286,19 @@ fn draw_value_only_wrapped(
     y - (value_lines.len() as f32) * line_height - row_gap
 }
 
-fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Result<Vec<u8>, String> {
-    use printpdf::{Image, ImageTransform, Mm, PdfDocument};
+fn generate_pdf_bytes(
+    payload: &InvoicePdfPayload,
+    logo_url: Option<&str>,
+) -> Result<Vec<u8>, String> {
     use base64::Engine as _;
+    use printpdf::{Image, ImageTransform, Mm, PdfDocument};
 
     // Language selection must be explicit (no implicit Serbian fallback).
-    let lang_raw = payload.language.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let lang_raw = payload
+        .language
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let lang_key = match lang_raw {
         Some(l) => {
             let lower = l.to_ascii_lowercase();
@@ -1282,12 +1331,7 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
         return Err(labels.err_client_registration_number_missing.clone());
     }
 
-    let (doc, page1, layer1) = PdfDocument::new(
-        &labels.doc_title,
-        Mm(210.0),
-        Mm(297.0),
-        "Layer 1",
-    );
+    let (doc, page1, layer1) = PdfDocument::new(&labels.doc_title, Mm(210.0), Mm(297.0), "Layer 1");
     let layer = doc.get_page(page1).get_layer(layer1);
 
     // Embed a Unicode font to support Cyrillic (ћирилица) and other non-ASCII characters.
@@ -1361,8 +1405,20 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
 
     // Language-dependent numeric formatting
     let is_sr = lang_key == "sr";
-    let fmt_money = |v: f64| if is_sr { format_money_sr(v) } else { format_money(v) };
-    let fmt_qty = |v: f64| if is_sr { format_qty_sr(v) } else { format!("{:.2}", v) };
+    let fmt_money = |v: f64| {
+        if is_sr {
+            format_money_sr(v)
+        } else {
+            format_money(v)
+        }
+    };
+    let fmt_qty = |v: f64| {
+        if is_sr {
+            format_qty_sr(v)
+        } else {
+            format!("{:.2}", v)
+        }
+    };
 
     // Build legal-note lines from templates (already localized, with placeholders resolved)
     let legal_note_text = mandatory_invoice_note_text(lang_key, &payload.invoice_number);
@@ -1382,7 +1438,14 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
     let doc_title_w = text_width_mm_ttf(&ttf_face, title_text.as_str(), doc_title_size);
     let doc_title_x = content_left_x + (content_width - doc_title_w) / 2.0;
     let doc_title_y = y - TITLE_TOP_PAD;
-    push_line(&layer, &font_bold, title_text.as_str(), doc_title_size, doc_title_x, doc_title_y);
+    push_line(
+        &layer,
+        &font_bold,
+        title_text.as_str(),
+        doc_title_size,
+        doc_title_x,
+        doc_title_y,
+    );
 
     // Shift the header block down; the top rule becomes the separator UNDER the title.
     y -= TITLE_BLOCK_H;
@@ -1425,8 +1488,7 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
             let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
             let img = printpdf::image_crate::load_from_memory(&bytes).ok()?;
             Some(img)
-        })
-        ;
+        });
 
     let row1_text_right_x = if decoded_logo.is_some() {
         (content_right_x - LOGO_AREA_W - LOGO_GAP).max(content_left_x)
@@ -1444,20 +1506,21 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
-    let company_address_value = if !company_address_line.is_empty() && !company_postal_and_city.is_empty() {
-        format!("{}, {}", company_address_line, company_postal_and_city)
-    } else if !company_address_line.is_empty() {
-        company_address_line.to_string()
-    } else {
-        payload
-            .company
-            .address
-            .lines()
-            .map(|l| l.trim())
-            .filter(|l| !l.is_empty())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
+    let company_address_value =
+        if !company_address_line.is_empty() && !company_postal_and_city.is_empty() {
+            format!("{}, {}", company_address_line, company_postal_and_city)
+        } else if !company_address_line.is_empty() {
+            company_address_line.to_string()
+        } else {
+            payload
+                .company
+                .address
+                .lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
 
     #[derive(Clone)]
     struct HeaderRow {
@@ -1825,11 +1888,40 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
     let header_band_bottom_y = y - HEADER_ROW_ADVANCE;
     let header_band_h = (header_band_top_y - header_band_bottom_y).max(0.0);
     let header_band_w = (table_right - table_left).max(0.0);
-    fill_rect_gray(&layer, table_left, header_band_top_y, header_band_w, header_band_h, 0.92);
+    fill_rect_gray(
+        &layer,
+        table_left,
+        header_band_top_y,
+        header_band_w,
+        header_band_h,
+        0.92,
+    );
 
-    push_line(&layer, &font_bold, &labels.col_description, header_size, service_header_x, y);
-    push_line(&layer, &font_bold, &labels.col_unit, header_size, unit_header_x, y);
-    push_line_right_measured(&layer, &font_bold, &ttf_face, &labels.col_qty, header_size, qty_right_x, y);
+    push_line(
+        &layer,
+        &font_bold,
+        &labels.col_description,
+        header_size,
+        service_header_x,
+        y,
+    );
+    push_line(
+        &layer,
+        &font_bold,
+        &labels.col_unit,
+        header_size,
+        unit_header_x,
+        y,
+    );
+    push_line_right_measured(
+        &layer,
+        &font_bold,
+        &ttf_face,
+        &labels.col_qty,
+        header_size,
+        qty_right_x,
+        y,
+    );
     push_line_right_measured(
         &layer,
         &font_bold,
@@ -1839,11 +1931,33 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
         price_right_x,
         y,
     );
-    push_line_right_measured(&layer, &font_bold, &ttf_face, &labels.col_discount, header_size, disc_right_x, y);
-    push_line_right_measured(&layer, &font_bold, &ttf_face, &labels.col_amount, header_size, numeric_right_x, y);
+    push_line_right_measured(
+        &layer,
+        &font_bold,
+        &ttf_face,
+        &labels.col_discount,
+        header_size,
+        disc_right_x,
+        y,
+    );
+    push_line_right_measured(
+        &layer,
+        &font_bold,
+        &ttf_face,
+        &labels.col_amount,
+        header_size,
+        numeric_right_x,
+        y,
+    );
 
     // Draw the top separator rule on top of the gray band.
-    draw_rule_with_thickness(&layer, content_left_x, content_right_x, items_header_top_rule_y, 0.45);
+    draw_rule_with_thickness(
+        &layer,
+        content_left_x,
+        content_right_x,
+        items_header_top_rule_y,
+        0.45,
+    );
 
     y -= HEADER_ROW_ADVANCE;
     draw_rule_with_thickness(&layer, table_left, table_right, y, 0.60);
@@ -1887,26 +2001,76 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
                 }
             }
         };
-        push_line(&layer, &font, unit_display, text_size, col_unit_left, row_top_y);
+        push_line(
+            &layer,
+            &font,
+            unit_display,
+            text_size,
+            col_unit_left,
+            row_top_y,
+        );
 
         // Qty/Price/Discount/Total
-        push_line_right_measured(&layer, &font, &ttf_face, &fmt_qty(it.quantity), text_size, qty_right_x, row_top_y);
-        push_line_right_measured(&layer, &font, &ttf_face, &fmt_money(it.unit_price), text_size, price_right_x, row_top_y);
+        push_line_right_measured(
+            &layer,
+            &font,
+            &ttf_face,
+            &fmt_qty(it.quantity),
+            text_size,
+            qty_right_x,
+            row_top_y,
+        );
+        push_line_right_measured(
+            &layer,
+            &font,
+            &ttf_face,
+            &fmt_money(it.unit_price),
+            text_size,
+            price_right_x,
+            row_top_y,
+        );
         let line_subtotal = it.quantity * it.unit_price;
         let line_discount = it.discount_amount.unwrap_or(0.0).clamp(0.0, line_subtotal);
         let line_total = line_subtotal - line_discount;
-        push_line_right_measured(&layer, &font, &ttf_face, &fmt_money(line_discount), text_size, disc_right_x, row_top_y);
-        push_line_right_measured(&layer, &font_bold, &ttf_face, &fmt_money(line_total), text_size, numeric_right_x, row_top_y);
+        push_line_right_measured(
+            &layer,
+            &font,
+            &ttf_face,
+            &fmt_money(line_discount),
+            text_size,
+            disc_right_x,
+            row_top_y,
+        );
+        push_line_right_measured(
+            &layer,
+            &font_bold,
+            &ttf_face,
+            &fmt_money(line_total),
+            text_size,
+            numeric_right_x,
+            row_top_y,
+        );
 
         let mut row_h_used = 0.0;
         for extra in desc_lines.iter().skip(1) {
             row_h_used += line_h;
-            push_line(&layer, &font, extra, text_size, col_service_left, row_top_y - row_h_used);
+            push_line(
+                &layer,
+                &font,
+                extra,
+                text_size,
+                col_service_left,
+                row_top_y - row_h_used,
+            );
         }
 
         // Advance to next row (tighten only between rows)
         let is_last_row = row_idx + 1 == payload.items.len();
-        let row_advance = if is_last_row { row_advance_base } else { row_advance_tight };
+        let row_advance = if is_last_row {
+            row_advance_base
+        } else {
+            row_advance_tight
+        };
         y = row_top_y - row_advance - row_h_used;
     }
 
@@ -2001,7 +2165,13 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
 
     // Box lines
     // Remove the totals top border to avoid a rule visually sticking to the first totals row.
-    draw_rule_with_thickness(&layer, totals_left, totals_box_right, totals_top_y - 3.0 * totals_row_h, 0.85);
+    draw_rule_with_thickness(
+        &layer,
+        totals_left,
+        totals_box_right,
+        totals_top_y - 3.0 * totals_row_h,
+        0.85,
+    );
 
     y = totals_top_y - 3.0 * totals_row_h - 7.0;
 
@@ -2062,7 +2232,14 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
     y -= 5.0;
 
     // E) Legal/tax note block (title + localized template lines)
-    push_line(&layer, &font_bold, &labels.legal_notes_title, 10.0, content_left_x, y);
+    push_line(
+        &layer,
+        &font_bold,
+        &labels.legal_notes_title,
+        10.0,
+        content_left_x,
+        y,
+    );
     y -= 4.6;
     for line in legal_note_lines {
         if y < footer_note_bottom_y + 12.0 {
@@ -2074,7 +2251,14 @@ fn generate_pdf_bytes(payload: &InvoicePdfPayload, logo_url: Option<&str>) -> Re
 
     // F) Footer / branding (tiny or omitted)
     if !labels.footer_generated.trim().is_empty() {
-        push_line(&layer, &font, &labels.footer_generated, 6.0, content_left_x, 4.0);
+        push_line(
+            &layer,
+            &font,
+            &labels.footer_generated,
+            6.0,
+            content_left_x,
+            4.0,
+        );
     }
 
     let mut writer = std::io::BufWriter::new(Vec::<u8>::new());
@@ -2847,7 +3031,9 @@ impl DbState {
         let conn = self.conn.clone();
         let write_lock = self.write_lock.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            let _wg = write_lock.lock().map_err(|_| "write mutex poisoned".to_string())?;
+            let _wg = write_lock
+                .lock()
+                .map_err(|_| "write mutex poisoned".to_string())?;
             let mut guard = conn.lock().map_err(|_| "db mutex poisoned".to_string())?;
             f(&mut guard).map_err(|e| {
                 let msg = sqlite_error_string(&e);
@@ -2921,7 +3107,8 @@ fn read_settings_from_conn(conn: &Connection) -> Result<Settings, rusqlite::Erro
         smtp_from,
         smtp_use_tls,
         smtp_tls_mode,
-    )) = row {
+    )) = row
+    {
         if let Ok(mut parsed) = serde_json::from_str::<Settings>(&data_json) {
             if let Some(v) = is_cfg {
                 parsed.is_configured = Some(v != 0);
@@ -2938,7 +3125,9 @@ fn read_settings_from_conn(conn: &Connection) -> Result<Settings, rusqlite::Erro
 
             if !company_address_line.trim().is_empty() {
                 parsed.company_address_line = company_address_line;
-            } else if parsed.company_address_line.trim().is_empty() && !legacy_addr.trim().is_empty() {
+            } else if parsed.company_address_line.trim().is_empty()
+                && !legacy_addr.trim().is_empty()
+            {
                 parsed.company_address_line = legacy_addr;
             }
             if !company_city.trim().is_empty() {
@@ -2969,7 +3158,8 @@ fn read_settings_from_conn(conn: &Connection) -> Result<Settings, rusqlite::Erro
             return Ok(parsed);
         }
 
-        let mode = parse_smtp_tls_mode_str(&smtp_tls_mode).unwrap_or_else(|| default_smtp_tls_mode_for_port(smtp_port));
+        let mode = parse_smtp_tls_mode_str(&smtp_tls_mode)
+            .unwrap_or_else(|| default_smtp_tls_mode_for_port(smtp_port));
         let effective_address_line = if !company_address_line.trim().is_empty() {
             company_address_line
         } else {
@@ -3006,11 +3196,16 @@ fn read_settings_from_conn(conn: &Connection) -> Result<Settings, rusqlite::Erro
 
 #[tauri::command]
 async fn get_settings(state: tauri::State<'_, DbState>) -> Result<Settings, String> {
-    state.with_read("get_settings", |conn| read_settings_from_conn(conn)).await
+    state
+        .with_read("get_settings", |conn| read_settings_from_conn(conn))
+        .await
 }
 
 #[tauri::command]
-async fn update_settings(state: tauri::State<'_, DbState>, patch: SettingsPatch) -> Result<Settings, String> {
+async fn update_settings(
+    state: tauri::State<'_, DbState>,
+    patch: SettingsPatch,
+) -> Result<Settings, String> {
     state
         .with_write("update_settings", move |conn| {
             let mut current = read_settings_from_conn(conn)?;
@@ -3174,7 +3369,10 @@ async fn generate_invoice_number(state: tauri::State<'_, DbState>) -> Result<Str
     state
         .with_read("generate_invoice_number", |conn| {
             let s = read_settings_from_conn(conn)?;
-            Ok(format_invoice_number(&s.invoice_prefix, s.next_invoice_number))
+            Ok(format_invoice_number(
+                &s.invoice_prefix,
+                s.next_invoice_number,
+            ))
         })
         .await
 }
@@ -3215,7 +3413,10 @@ async fn get_all_clients(state: tauri::State<'_, DbState>) -> Result<Vec<Client>
 }
 
 #[tauri::command]
-async fn get_client_by_id(state: tauri::State<'_, DbState>, id: String) -> Result<Option<Client>, String> {
+async fn get_client_by_id(
+    state: tauri::State<'_, DbState>,
+    id: String,
+) -> Result<Option<Client>, String> {
     state
         .with_read("get_client_by_id", move |conn| {
             let json: Option<String> = conn
@@ -3235,7 +3436,10 @@ async fn get_client_by_id(state: tauri::State<'_, DbState>, id: String) -> Resul
 }
 
 #[tauri::command]
-async fn create_client(state: tauri::State<'_, DbState>, input: NewClient) -> Result<Client, String> {
+async fn create_client(
+    state: tauri::State<'_, DbState>,
+    input: NewClient,
+) -> Result<Client, String> {
     state
         .with_write("create_client", move |conn| {
             let created = Client {
@@ -3345,7 +3549,8 @@ async fn delete_client(state: tauri::State<'_, DbState>, id: String) -> Result<b
 async fn get_all_invoices(state: tauri::State<'_, DbState>) -> Result<Vec<Invoice>, String> {
     state
         .with_read("get_all_invoices", |conn| {
-            let mut stmt = conn.prepare("SELECT data_json FROM invoices ORDER BY createdAt DESC")?;
+            let mut stmt =
+                conn.prepare("SELECT data_json FROM invoices ORDER BY createdAt DESC")?;
             let mut rows = stmt.query([])?;
             let mut out: Vec<Invoice> = Vec::new();
             while let Some(row) = rows.next()? {
@@ -3388,7 +3593,10 @@ async fn list_invoices_range(
 }
 
 #[tauri::command]
-async fn get_invoice_by_id(state: tauri::State<'_, DbState>, id: String) -> Result<Option<Invoice>, String> {
+async fn get_invoice_by_id(
+    state: tauri::State<'_, DbState>,
+    id: String,
+) -> Result<Option<Invoice>, String> {
     state
         .with_read("get_invoice_by_id", move |conn| {
             let json: Option<String> = conn
@@ -3408,7 +3616,10 @@ async fn get_invoice_by_id(state: tauri::State<'_, DbState>, id: String) -> Resu
 }
 
 #[tauri::command]
-async fn create_invoice(state: tauri::State<'_, DbState>, input: NewInvoice) -> Result<Invoice, String> {
+async fn create_invoice(
+    state: tauri::State<'_, DbState>,
+    input: NewInvoice,
+) -> Result<Invoice, String> {
     state
         .with_write("create_invoice", move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -3637,11 +3848,19 @@ async fn create_expense(
     let date = date.trim().to_string();
     let category = category.and_then(|s| {
         let t = s.trim().to_string();
-        if t.is_empty() { None } else { Some(t) }
+        if t.is_empty() {
+            None
+        } else {
+            Some(t)
+        }
     });
     let notes = notes.and_then(|s| {
         let t = s.trim().to_string();
-        if t.is_empty() { None } else { Some(t) }
+        if t.is_empty() {
+            None
+        } else {
+            Some(t)
+        }
     });
 
     if title.is_empty() {
@@ -3863,8 +4082,13 @@ async fn send_invoice_email(
         .parse()
         .map_err(|_| "Invalid recipient email address.".to_string())?;
 
-    let (html_body, text_body) =
-        render_invoice_email(&settings, &invoice, client.as_ref(), include_pdf, body.as_deref())?;
+    let (html_body, text_body) = render_invoice_email(
+        &settings,
+        &invoice,
+        client.as_ref(),
+        include_pdf,
+        body.as_deref(),
+    )?;
     let alternative = MultiPart::alternative()
         .singlepart(SinglePart::plain(text_body))
         .singlepart(SinglePart::html(html_body));
@@ -3882,7 +4106,11 @@ async fn send_invoice_email(
             .from(from_mailbox)
             .to(to_mailbox)
             .subject(subject)
-            .multipart(MultiPart::mixed().multipart(alternative).singlepart(attachment))
+            .multipart(
+                MultiPart::mixed()
+                    .multipart(alternative)
+                    .singlepart(attachment),
+            )
             .map_err(|e| format!("Failed to build email: {e}"))?
     } else {
         Message::builder()
@@ -3903,7 +4131,9 @@ async fn send_invoice_email(
 #[tauri::command]
 async fn send_test_email(state: tauri::State<'_, DbState>) -> Result<bool, String> {
     let settings = state
-        .with_read("send_test_email_settings", move |conn| read_settings_from_conn(conn))
+        .with_read("send_test_email_settings", move |conn| {
+            read_settings_from_conn(conn)
+        })
         .await?;
 
     validate_smtp_settings(&settings)?;
@@ -3934,9 +4164,11 @@ async fn send_test_email(state: tauri::State<'_, DbState>) -> Result<bool, Strin
         "Ovo je test email poruka. Vaša SMTP podešavanja rade.".to_string()
     };
     let html_body: String = if is_en {
-        "<p><strong>This is a test email.</strong></p><p>Your SMTP settings are working.</p>".to_string()
+        "<p><strong>This is a test email.</strong></p><p>Your SMTP settings are working.</p>"
+            .to_string()
     } else {
-        "<p><strong>Ovo je test email poruka.</strong></p><p>Vaša SMTP podešavanja rade.</p>".to_string()
+        "<p><strong>Ovo je test email poruka.</strong></p><p>Vaša SMTP podešavanja rade.</p>"
+            .to_string()
     };
 
     let email = Message::builder()
@@ -3979,15 +4211,23 @@ async fn export_invoice_pdf_to_downloads(
         })
         .await?;
     let logo_url = logo_url.trim().to_string();
-    let bytes = generate_pdf_bytes(&payload, if logo_url.is_empty() { None } else { Some(logo_url.as_str()) })?;
+    let bytes = generate_pdf_bytes(
+        &payload,
+        if logo_url.is_empty() {
+            None
+        } else {
+            Some(logo_url.as_str())
+        },
+    )?;
 
-    let downloads_dir = app
-        .path()
-        .download_dir()
-        .map_err(|e| e.to_string())?;
+    let downloads_dir = app.path().download_dir().map_err(|e| e.to_string())?;
 
     let client_part = payload.client.name.trim();
-    let client_part = if client_part.is_empty() { "client" } else { client_part };
+    let client_part = if client_part.is_empty() {
+        "client"
+    } else {
+        client_part
+    };
     // NOTE: in debug builds, add a timestamp suffix to avoid PDF viewer caching false negatives.
     // (Safe to revert later; release builds keep the stable name.)
     let mut filename_stem = format!("{}-{}", payload.invoice_number, client_part);
@@ -4007,7 +4247,8 @@ async fn export_invoice_pdf_to_downloads(
 }
 
 fn csv_escape_field(input: &str) -> String {
-    let needs_quotes = input.contains(',') || input.contains('"') || input.contains('\n') || input.contains('\r');
+    let needs_quotes =
+        input.contains(',') || input.contains('"') || input.contains('\n') || input.contains('\r');
     if !needs_quotes {
         return input.to_string();
     }
@@ -4036,7 +4277,11 @@ fn format_quantity_csv(v: f64) -> String {
     // Trim trailing zeros for determinism.
     let s = format!("{:.6}", v);
     let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s.is_empty() { "0".to_string() } else { s.to_string() }
+    if s.is_empty() {
+        "0".to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 fn write_text_file(path: &std::path::Path, contents: &str) -> Result<(), String> {
@@ -4098,7 +4343,9 @@ async fn export_invoices_csv(
     ];
 
     let mut lines: Vec<String> = Vec::new();
-    lines.push(csv_join_row(&header.iter().map(|s| s.to_string()).collect::<Vec<_>>()));
+    lines.push(csv_join_row(
+        &header.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+    ));
 
     for inv in invoices {
         let is_default = inv.currency.trim() == default_currency.trim();
@@ -4117,7 +4364,11 @@ async fn export_invoices_csv(
                 inv.client_id.clone(),
                 inv.client_name.clone(),
                 inv.currency.clone(),
-                if is_default { "true".to_string() } else { "false".to_string() },
+                if is_default {
+                    "true".to_string()
+                } else {
+                    "false".to_string()
+                },
                 format_money_csv(inv.subtotal),
                 format_money_csv(inv.total),
                 item.id.clone(),
@@ -4189,7 +4440,9 @@ async fn export_expenses_csv(
     ];
 
     let mut lines: Vec<String> = Vec::new();
-    lines.push(csv_join_row(&header.iter().map(|s| s.to_string()).collect::<Vec<_>>()));
+    lines.push(csv_join_row(
+        &header.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+    ));
 
     for exp in expenses {
         let is_default = exp.currency.trim() == default_currency.trim();
@@ -4200,7 +4453,11 @@ async fn export_expenses_csv(
             exp.category.unwrap_or_default(),
             format_money_csv(exp.amount),
             exp.currency,
-            if is_default { "true".to_string() } else { "false".to_string() },
+            if is_default {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            },
             exp.notes.unwrap_or_default(),
             exp.created_at,
         ];
@@ -4240,28 +4497,44 @@ fn resolve_updates_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 fn resolve_app_data_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    if let Ok(dir) = app.path().app_data_dir() { return Ok(dir); }
-    if let Ok(dir) = app.path().app_local_data_dir() { return Ok(dir); }
-    if let Ok(exe) = std::env::current_exe() { if let Some(dir) = exe.parent() { return Ok(dir.to_path_buf()); } }
+    if let Ok(dir) = app.path().app_data_dir() {
+        return Ok(dir);
+    }
+    if let Ok(dir) = app.path().app_local_data_dir() {
+        return Ok(dir);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            return Ok(dir.to_path_buf());
+        }
+    }
     std::env::current_dir().map_err(|e| e.to_string())
 }
 
 fn safe_join(base: &PathBuf, rel: &str) -> Option<PathBuf> {
     let mut out = base.clone();
     for part in rel.split('/') {
-        if part.is_empty() || part == "." { continue; }
-        if part == ".." { return None; }
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            return None;
+        }
         out.push(part);
     }
     Some(out)
 }
 
 fn now_iso_basic() -> String {
-    OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_else(|_| "".to_string())
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "".to_string())
 }
 
 fn copy_dir_recursive(src: &PathBuf, dest: &PathBuf) -> Result<(), String> {
-    if !src.exists() { return Ok(()); }
+    if !src.exists() {
+        return Ok(());
+    }
     fs::create_dir_all(dest).map_err(|e| e.to_string())?;
     let mut stack: Vec<(PathBuf, PathBuf)> = vec![(src.clone(), dest.clone())];
     while let Some((s, d)) = stack.pop() {
@@ -4391,21 +4664,40 @@ pub fn run() {
                 );
                 let restore_dir = root.join("restore");
                 let plan_path = restore_dir.join("restore-plan.json");
-                println!("Startup: plan_path = {} (exists={})", plan_path.display(), plan_path.exists());
+                println!(
+                    "Startup: plan_path = {} (exists={})",
+                    plan_path.display(),
+                    plan_path.exists()
+                );
                 if plan_path.exists() {
                     println!("Restore plan detected");
                     let ts = OffsetDateTime::now_utc();
-                    let suffix = ts.format(&time::macros::format_description!("[year][month][day]-[hour][minute][second]")).unwrap_or_else(|_| "backup".to_string());
+                    let suffix = ts
+                        .format(&time::macros::format_description!(
+                            "[year][month][day]-[hour][minute][second]"
+                        ))
+                        .unwrap_or_else(|_| "backup".to_string());
                     let backup_path = db_path.with_file_name(format!("pausaler.db.bak-{}", suffix));
                     if db_path.exists() {
                         println!("Restore: backup current db -> {}", backup_path.display());
-                        if let Err(e) = fs::copy(&db_path, &backup_path) { eprintln!("Restore failed to backup current DB: {}", e); }
+                        if let Err(e) = fs::copy(&db_path, &backup_path) {
+                            eprintln!("Restore failed to backup current DB: {}", e);
+                        }
                     }
 
                     let plan_json = std::fs::read_to_string(&plan_path).unwrap_or_default();
-                    let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap_or(serde_json::json!({}));
-                    let staged_db = PathBuf::from(plan.get("stagedDbPath").and_then(|v| v.as_str()).unwrap_or(""));
-                    let staged_assets = PathBuf::from(plan.get("stagedAssetsPath").and_then(|v| v.as_str()).unwrap_or(""));
+                    let plan: serde_json::Value =
+                        serde_json::from_str(&plan_json).unwrap_or(serde_json::json!({}));
+                    let staged_db = PathBuf::from(
+                        plan.get("stagedDbPath")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                    );
+                    let staged_assets = PathBuf::from(
+                        plan.get("stagedAssetsPath")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                    );
                     let staged_db_exists = staged_db.exists();
                     let staged_db_size = staged_db.metadata().map(|m| m.len()).unwrap_or(0);
                     println!(
@@ -4417,17 +4709,30 @@ pub fn run() {
 
                     // Remove WAL/SHM before replacing DB to avoid stale state overriding restored DB
                     println!("Restore: Deleting WAL/SHM before replacement");
-                    if let Err(e) = remove_if_exists(&db_wal) { eprintln!("Restore: failed to delete WAL: {}", e); }
-                    if let Err(e) = remove_if_exists(&db_shm) { eprintln!("Restore: failed to delete SHM: {}", e); }
+                    if let Err(e) = remove_if_exists(&db_wal) {
+                        eprintln!("Restore: failed to delete WAL: {}", e);
+                    }
+                    if let Err(e) = remove_if_exists(&db_shm) {
+                        eprintln!("Restore: failed to delete SHM: {}", e);
+                    }
 
                     let mut applied_ok = false;
                     if staged_db.exists() {
-                        println!("Restore: replace db {} -> {}", staged_db.display(), db_path.display());
+                        println!(
+                            "Restore: replace db {} -> {}",
+                            staged_db.display(),
+                            db_path.display()
+                        );
                         println!("Replacing DB atomically via temp file");
                         // Copy staged DB to a temp file in target directory, then rename over existing DB
-                        let target_dir = db_path.parent().map(|p| p.to_path_buf()).unwrap_or(root.clone());
+                        let target_dir = db_path
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or(root.clone());
                         let tmp_path = target_dir.join(".pausaler.db.tmp");
-                        if tmp_path.exists() { let _ = std::fs::remove_file(&tmp_path); }
+                        if tmp_path.exists() {
+                            let _ = std::fs::remove_file(&tmp_path);
+                        }
                         match std::fs::copy(&staged_db, &tmp_path) {
                             Ok(_) => {
                                 if db_path.exists() {
@@ -4442,12 +4747,16 @@ pub fn run() {
                                         let _ = remove_if_exists(&db_shm);
                                         println!(
                                             "Post-replace: wal exists={} | shm exists={}",
-                                            db_wal.exists(), db_shm.exists()
+                                            db_wal.exists(),
+                                            db_shm.exists()
                                         );
                                         applied_ok = true;
                                     }
                                     Err(e) => {
-                                        eprintln!("Restore failed renaming temp DB into place: {}", e);
+                                        eprintln!(
+                                            "Restore failed renaming temp DB into place: {}",
+                                            e
+                                        );
                                         eprintln!("Restore NOT applied");
                                         applied_ok = false;
                                         let _ = std::fs::remove_file(&tmp_path);
@@ -4467,7 +4776,11 @@ pub fn run() {
 
                     if applied_ok && staged_assets.exists() {
                         let dest_assets = root.join("assets");
-                        println!("Restore: copy assets {} -> {}", staged_assets.display(), dest_assets.display());
+                        println!(
+                            "Restore: copy assets {} -> {}",
+                            staged_assets.display(),
+                            dest_assets.display()
+                        );
                         if let Err(e) = copy_dir_recursive(&staged_assets, &dest_assets) {
                             eprintln!("Restore failed copying assets: {}", e);
                             eprintln!("Restore NOT applied");
@@ -4567,7 +4880,9 @@ fn validate_smtp_settings(s: &Settings) -> Result<(), String> {
     if s.smtp_use_tls {
         let mode = resolved_smtp_tls_mode(s.smtp_tls_mode, s.smtp_port);
         if s.smtp_port == 465 && mode != SmtpTlsMode::Implicit {
-            return Err("SMTP TLS mode mismatch: port 465 requires Implicit TLS (SMTPS).".to_string());
+            return Err(
+                "SMTP TLS mode mismatch: port 465 requires Implicit TLS (SMTPS).".to_string(),
+            );
         }
         if s.smtp_port == 587 && mode != SmtpTlsMode::Starttls {
             return Err("SMTP TLS mode mismatch: port 587 requires STARTTLS.".to_string());
@@ -4657,7 +4972,11 @@ fn read_client_from_conn(conn: &Connection, id: &str) -> Result<Option<Client>, 
     Ok(json.and_then(|j| serde_json::from_str::<Client>(&j).ok()))
 }
 
-fn build_invoice_pdf_payload_from_db(invoice: &Invoice, client: Option<&Client>, settings: &Settings) -> InvoicePdfPayload {
+fn build_invoice_pdf_payload_from_db(
+    invoice: &Invoice,
+    client: Option<&Client>,
+    settings: &Settings,
+) -> InvoicePdfPayload {
     let mut computed_subtotal: f64 = 0.0;
     let mut computed_discount_total: f64 = 0.0;
     let mut computed_total: f64 = 0.0;
@@ -4680,7 +4999,11 @@ fn build_invoice_pdf_payload_from_db(invoice: &Invoice, client: Option<&Client>,
                 unit: it.unit.clone().filter(|s| !s.trim().is_empty()),
                 quantity: it.quantity,
                 unit_price: it.unit_price,
-                discount_amount: if line_discount > 0.0 { Some(line_discount) } else { None },
+                discount_amount: if line_discount > 0.0 {
+                    Some(line_discount)
+                } else {
+                    None
+                },
                 total: line_total,
             }
         })
@@ -4714,10 +5037,16 @@ fn build_invoice_pdf_payload_from_db(invoice: &Invoice, client: Option<&Client>,
                     }
                     line2.push_str(city);
                 }
-                [line1.to_string(), line2].into_iter().filter(|s| !s.trim().is_empty()).collect::<Vec<_>>().join("\n")
+                [line1.to_string(), line2]
+                    .into_iter()
+                    .filter(|s| !s.trim().is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n")
             },
-            address_line: Some(settings.company_address_line.clone()).filter(|s| !s.trim().is_empty()),
-            postal_code: Some(settings.company_postal_code.clone()).filter(|s| !s.trim().is_empty()),
+            address_line: Some(settings.company_address_line.clone())
+                .filter(|s| !s.trim().is_empty()),
+            postal_code: Some(settings.company_postal_code.clone())
+                .filter(|s| !s.trim().is_empty()),
             city: Some(settings.company_city.clone()).filter(|s| !s.trim().is_empty()),
             bank_account: settings.bank_account.clone(),
             email: Some(settings.company_email.clone()).filter(|s| !s.trim().is_empty()),
@@ -4728,12 +5057,24 @@ fn build_invoice_pdf_payload_from_db(invoice: &Invoice, client: Option<&Client>,
             registration_number: client
                 .map(|c| c.registration_number.clone())
                 .filter(|s| !s.trim().is_empty()),
-            pib: client.map(|c| c.pib.clone()).filter(|s| !s.trim().is_empty()),
-            address: client.map(|c| c.address.clone()).filter(|s| !s.trim().is_empty()),
-            address_line: client.map(|c| c.address.clone()).filter(|s| !s.trim().is_empty()),
-            postal_code: client.map(|c| c.postal_code.clone()).filter(|s| !s.trim().is_empty()),
-            city: client.map(|c| c.city.clone()).filter(|s| !s.trim().is_empty()),
-            email: client.map(|c| c.email.clone()).filter(|s| !s.trim().is_empty()),
+            pib: client
+                .map(|c| c.pib.clone())
+                .filter(|s| !s.trim().is_empty()),
+            address: client
+                .map(|c| c.address.clone())
+                .filter(|s| !s.trim().is_empty()),
+            address_line: client
+                .map(|c| c.address.clone())
+                .filter(|s| !s.trim().is_empty()),
+            postal_code: client
+                .map(|c| c.postal_code.clone())
+                .filter(|s| !s.trim().is_empty()),
+            city: client
+                .map(|c| c.city.clone())
+                .filter(|s| !s.trim().is_empty()),
+            email: client
+                .map(|c| c.email.clone())
+                .filter(|s| !s.trim().is_empty()),
             phone: None,
         },
         items,
@@ -4756,11 +5097,12 @@ static MANDATORY_NOTE_TEMPLATES: OnceLock<MandatoryInvoiceNoteTemplates> = OnceL
 fn mandatory_invoice_note_templates() -> &'static MandatoryInvoiceNoteTemplates {
     MANDATORY_NOTE_TEMPLATES.get_or_init(|| {
         let json = include_str!("../../src/shared/mandatoryInvoiceNote.json");
-        serde_json::from_str::<MandatoryInvoiceNoteTemplates>(json)
-            .unwrap_or_else(|_| MandatoryInvoiceNoteTemplates {
+        serde_json::from_str::<MandatoryInvoiceNoteTemplates>(json).unwrap_or_else(|_| {
+            MandatoryInvoiceNoteTemplates {
                 sr: MandatoryInvoiceNoteLocale { lines: vec![] },
                 en: MandatoryInvoiceNoteLocale { lines: vec![] },
-            })
+            }
+        })
     })
 }
 
@@ -4832,12 +5174,21 @@ fn draw_inline_labeled_row(
 }
 
 #[tauri::command]
-async fn get_app_meta(state: tauri::State<'_, DbState>, key: String) -> Result<Option<String>, String> {
-    state.with_read("get_app_meta", move |conn| app_meta_get(conn, &key)).await
+async fn get_app_meta(
+    state: tauri::State<'_, DbState>,
+    key: String,
+) -> Result<Option<String>, String> {
+    state
+        .with_read("get_app_meta", move |conn| app_meta_get(conn, &key))
+        .await
 }
 
 #[tauri::command]
-async fn set_app_meta(state: tauri::State<'_, DbState>, key: String, value: String) -> Result<bool, String> {
+async fn set_app_meta(
+    state: tauri::State<'_, DbState>,
+    key: String,
+    value: String,
+) -> Result<bool, String> {
     state
         .with_write("set_app_meta", move |conn| {
             app_meta_set(conn, &key, &value)?;
@@ -4905,7 +5256,10 @@ fn generate_activation_code(pib: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn verify_license(license: String, pib: String) -> Result<license::license_payload::VerifiedLicenseInfo, String> {
+fn verify_license(
+    license: String,
+    pib: String,
+) -> Result<license::license_payload::VerifiedLicenseInfo, String> {
     let public_key_pem = include_str!("../assets/public_key.pem");
     let pib_hash = license::crypto::sha256_hex(pib.trim());
     let now = OffsetDateTime::now_utc();
@@ -4918,15 +5272,14 @@ fn verify_license(license: String, pib: String) -> Result<license::license_paylo
 async fn send_license_request_email(
     state: tauri::State<'_, DbState>,
     input: SendLicenseRequestEmailInput,
-)
-    -> Result<bool, String>
-{
+) -> Result<bool, String> {
     let settings = state
-        .with_read("send_license_request_email_settings", move |conn| read_settings_from_conn(conn))
+        .with_read("send_license_request_email_settings", move |conn| {
+            read_settings_from_conn(conn)
+        })
         .await?;
 
     validate_smtp_settings(&settings)?;
-
 
     // Hardcoded vendor recipient; ignore UI-provided value.
     let to_raw = "dragisa1984@yahoo.com".to_string();
@@ -4966,12 +5319,15 @@ async fn send_license_request_email(
         while i < lines.len() {
             let line = lines[i].trim();
             let lower = line.to_ascii_lowercase();
-            if i == 0 && !line.is_empty() { header = Some(line); }
+            if i == 0 && !line.is_empty() {
+                header = Some(line);
+            }
             if lower.starts_with("tip licence:") || lower.starts_with("license type:") {
                 license_type_line = Some(line);
                 i += 1;
                 continue;
-            } else if lower.starts_with("aktivacioni kod:") || lower.starts_with("activation code:") {
+            } else if lower.starts_with("aktivacioni kod:") || lower.starts_with("activation code:")
+            {
                 // Collect subsequent non-empty lines until blank line
                 code_header = Some(line);
                 i += 1;
@@ -4979,13 +5335,17 @@ async fn send_license_request_email(
                     code_lines.push(lines[i]);
                     i += 1;
                 }
-            } else if lower.starts_with("podaci o preduzeću:") || lower.starts_with("company details:") {
+            } else if lower.starts_with("podaci o preduzeću:")
+                || lower.starts_with("company details:")
+            {
                 // Collect next few lines (label: value)
                 company_header = Some(line);
                 i += 1;
                 while i < lines.len() {
                     let s = lines[i].trim();
-                    if s.is_empty() { break; }
+                    if s.is_empty() {
+                        break;
+                    }
                     // Expect "Label: value"
                     company_lines.push(lines[i]);
                     i += 1;
@@ -5018,7 +5378,11 @@ async fn send_license_request_email(
 
         if !code_lines.is_empty() {
             html.push_str("<div><div style=\"font-weight:600;margin:8px 0 4px 0\">");
-            if let Some(ch) = code_header { html.push_str(&escape_html(ch)); } else { html.push_str("Activation code:"); }
+            if let Some(ch) = code_header {
+                html.push_str(&escape_html(ch));
+            } else {
+                html.push_str("Activation code:");
+            }
             html.push_str("</div>");
             let joined = code_lines.join("\n");
             html.push_str("<pre style=\"font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;white-space:pre-wrap;word-break:break-word;border:1px solid #ddd;border-radius:6px;padding:12px;background:#f8f8f8;\">");
@@ -5028,7 +5392,11 @@ async fn send_license_request_email(
 
         if !company_lines.is_empty() {
             html.push_str("<div><div style=\"font-weight:600;margin:8px 0 4px 0\">");
-            if let Some(ch) = company_header { html.push_str(&escape_html(ch)); } else { html.push_str("Company details:"); }
+            if let Some(ch) = company_header {
+                html.push_str(&escape_html(ch));
+            } else {
+                html.push_str("Company details:");
+            }
             html.push_str("</div>");
             html.push_str("<table style=\"border-collapse:collapse;font-size:14px\">");
             for row in company_lines {
@@ -5048,7 +5416,11 @@ async fn send_license_request_email(
 
         if !note_lines.is_empty() {
             html.push_str("<div><div style=\"font-weight:600;margin:8px 0 4px 0\">");
-            if let Some(nh) = note_header { html.push_str(&escape_html(nh)); } else { html.push_str("User note:"); }
+            if let Some(nh) = note_header {
+                html.push_str(&escape_html(nh));
+            } else {
+                html.push_str("User note:");
+            }
             html.push_str("</div>");
             let note_text = note_lines.join("\n");
             let escaped = escape_html(&note_text).replace('\n', "<br>");
@@ -5065,7 +5437,7 @@ async fn send_license_request_email(
     } else {
         build_html_from_text(&text_body)
     };
-    
+
     let email = Message::builder()
         .from(from_mailbox)
         .to(to_mailbox)
@@ -5099,7 +5471,9 @@ async fn send_email_via_smtp(
 
     tauri::async_runtime::spawn_blocking(move || {
         let transport = build_smtp_transport(&settings)?;
-        transport.send(&email).map_err(|e| format!("Failed to send email: {e}"))?;
+        transport
+            .send(&email)
+            .map_err(|e| format!("Failed to send email: {e}"))?;
         Ok::<(), String>(())
     })
     .await
@@ -5108,8 +5482,12 @@ async fn send_email_via_smtp(
     Ok(())
 }
 
-fn read_metadata_from_zip<R: std::io::Read + std::io::Seek>(mut ar: ZipArchive<R>) -> Result<BackupMetadataResult, String> {
-    let mut file = ar.by_name("metadata.json").map_err(|_| "metadata.json not found".to_string())?;
+fn read_metadata_from_zip<R: std::io::Read + std::io::Seek>(
+    mut ar: ZipArchive<R>,
+) -> Result<BackupMetadataResult, String> {
+    let mut file = ar
+        .by_name("metadata.json")
+        .map_err(|_| "metadata.json not found".to_string())?;
     let mut buf = Vec::new();
     use std::io::Read as _;
     file.read_to_end(&mut buf).map_err(|e| e.to_string())?;
@@ -5132,10 +5510,15 @@ async fn inspect_backup_archive(archive_path: String) -> Result<BackupMetadataRe
 }
 
 #[tauri::command]
-async fn create_backup_archive(app: tauri::AppHandle, dest_path: String) -> Result<BackupResult, String> {
+async fn create_backup_archive(
+    app: tauri::AppHandle,
+    dest_path: String,
+) -> Result<BackupResult, String> {
     // Resolve destination and ensure parent exists
     let dest = PathBuf::from(dest_path);
-    let parent = dest.parent().ok_or_else(|| "Invalid destination path".to_string())?;
+    let parent = dest
+        .parent()
+        .ok_or_else(|| "Invalid destination path".to_string())?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
 
     // Resolve app_data_dir strictly from current runtime
@@ -5151,7 +5534,10 @@ async fn create_backup_archive(app: tauri::AppHandle, dest_path: String) -> Resu
     let db_meta = fs::metadata(&db_path).ok();
     let db_exists = db_meta.is_some();
     let db_size = db_meta.map(|m| m.len()).unwrap_or(0);
-    println!("Backup: db exists = {}, size = {} bytes", db_exists, db_size);
+    println!(
+        "Backup: db exists = {}, size = {} bytes",
+        db_exists, db_size
+    );
     println!("Backup: dest_archive = {}", dest.display());
 
     // Safety guards
@@ -5170,8 +5556,10 @@ async fn create_backup_archive(app: tauri::AppHandle, dest_path: String) -> Resu
     // Force WAL changes into main DB before zipping
     println!("Backup: checkpoint(TRUNCATE) start");
     {
-        let conn = rusqlite::Connection::open(&db_path).map_err(|e| format!("Failed to open DB for checkpoint: {}", e))?;
-        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);").map_err(|e| format!("Checkpoint(TRUNCATE) failed: {}", e))?;
+        let conn = rusqlite::Connection::open(&db_path)
+            .map_err(|e| format!("Failed to open DB for checkpoint: {}", e))?;
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(|e| format!("Checkpoint(TRUNCATE) failed: {}", e))?;
         // conn dropped at end of scope
     }
     println!("Backup: checkpoint(TRUNCATE) ok");
@@ -5182,7 +5570,9 @@ async fn create_backup_archive(app: tauri::AppHandle, dest_path: String) -> Resu
 
     // Prepare temp path and zip options
     let tmp_path = parent.join(".pausaler-backup.tmp");
-    if tmp_path.exists() { let _ = fs::remove_file(&tmp_path); }
+    if tmp_path.exists() {
+        let _ = fs::remove_file(&tmp_path);
+    }
     let f = std::fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
     let mut zip = ZipWriter::new(f);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
@@ -5197,11 +5587,14 @@ async fn create_backup_archive(app: tauri::AppHandle, dest_path: String) -> Resu
         archive_format_version: 1,
     };
     let meta_json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
-    zip.start_file("metadata.json", options).map_err(|e| e.to_string())?;
-    zip.write_all(&meta_json).map_err(|e: std::io::Error| e.to_string())?;
+    zip.start_file("metadata.json", options)
+        .map_err(|e| e.to_string())?;
+    zip.write_all(&meta_json)
+        .map_err(|e: std::io::Error| e.to_string())?;
 
     let mut db_file = std::fs::File::open(&db_path).map_err(|e| e.to_string())?;
-    zip.start_file("pausaler.db", options).map_err(|e| e.to_string())?;
+    zip.start_file("pausaler.db", options)
+        .map_err(|e| e.to_string())?;
     std::io::copy(&mut db_file, &mut zip).map_err(|e| e.to_string())?;
 
     // Option A: backup contains ONLY pausaler.db (no -wal/-shm, no assets)
@@ -5222,7 +5615,11 @@ async fn create_backup_archive(app: tauri::AppHandle, dest_path: String) -> Resu
     let lb_json = serde_json::to_vec(&lb).map_err(|e| e.to_string())?;
     fs::write(&lb_path, &lb_json).map_err(|e| e.to_string())?;
 
-    Ok(BackupResult { path: dest.to_string_lossy().to_string(), size_bytes, created_at: meta.created_at })
+    Ok(BackupResult {
+        path: dest.to_string_lossy().to_string(),
+        size_bytes,
+        created_at: meta.created_at,
+    })
 }
 
 #[tauri::command]
@@ -5246,41 +5643,73 @@ async fn get_last_backup_metadata(app: tauri::AppHandle) -> Result<LastBackupInf
 }
 
 #[tauri::command]
-async fn stage_restore_archive(app: tauri::AppHandle, archive_path: String) -> Result<RestoreStageResult, String> {
+async fn stage_restore_archive(
+    app: tauri::AppHandle,
+    archive_path: String,
+) -> Result<RestoreStageResult, String> {
     let f = std::fs::File::open(&archive_path).map_err(|e| e.to_string())?;
     let mut ar = ZipArchive::new(f).map_err(|e| e.to_string())?;
-    let _meta = read_metadata_from_zip(ZipArchive::new(std::fs::File::open(&archive_path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?)?;
+    let _meta = read_metadata_from_zip(
+        ZipArchive::new(std::fs::File::open(&archive_path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?,
+    )?;
 
     let mut has_db = false;
     for i in 0..ar.len() {
-        let name = ar.by_index(i).map_err(|e| e.to_string())?.name().to_string();
-        if name == "pausaler.db" { has_db = true; break; }
+        let name = ar
+            .by_index(i)
+            .map_err(|e| e.to_string())?
+            .name()
+            .to_string();
+        if name == "pausaler.db" {
+            has_db = true;
+            break;
+        }
     }
-    if !has_db { return Err("Archive missing pausaler.db".to_string()); }
+    if !has_db {
+        return Err("Archive missing pausaler.db".to_string());
+    }
 
     let root = resolve_app_data_root(&app)?;
-    let stage_dir = root.join("restore_stage").join(format!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()));
+    let stage_dir = root.join("restore_stage").join(format!(
+        "{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    ));
     fs::create_dir_all(&stage_dir).map_err(|e| e.to_string())?;
 
     for i in 0..ar.len() {
         let mut file = ar.by_index(i).map_err(|e| e.to_string())?;
         let name = file.name().to_string();
-        let allowed = name == "pausaler.db" || name == "metadata.json" || name.starts_with("assets/");
-        if !allowed { continue; }
-        if name.contains("../") { return Err("Invalid archive entry path".to_string()); }
+        let allowed =
+            name == "pausaler.db" || name == "metadata.json" || name.starts_with("assets/");
+        if !allowed {
+            continue;
+        }
+        if name.contains("../") {
+            return Err("Invalid archive entry path".to_string());
+        }
         let out_path = safe_join(&stage_dir, &name).ok_or_else(|| "Invalid path".to_string())?;
-        if let Some(parent) = out_path.parent() { fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
         let mut out_file = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
         std::io::copy(&mut file, &mut out_file).map_err(|e| e.to_string())?;
     }
 
     let staged_db = stage_dir.join("pausaler.db");
-    if !staged_db.exists() { return Err("Failed to stage database".to_string()); }
+    if !staged_db.exists() {
+        return Err("Failed to stage database".to_string());
+    }
 
     let restore_dir = root.join("restore");
     fs::create_dir_all(&restore_dir).map_err(|e| e.to_string())?;
     let staged_target = restore_dir.join("pausaler.db");
-    if staged_target.exists() { let _ = fs::remove_file(&staged_target); }
+    if staged_target.exists() {
+        let _ = fs::remove_file(&staged_target);
+    }
     fs::copy(&staged_db, &staged_target).map_err(|e| e.to_string())?;
 
     let plan = serde_json::json!({
@@ -5290,7 +5719,14 @@ async fn stage_restore_archive(app: tauri::AppHandle, archive_path: String) -> R
         "createdAt": now_iso_basic(),
     });
     let plan_path = restore_dir.join("restore-plan.json");
-    std::fs::write(&plan_path, serde_json::to_vec(&plan).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    std::fs::write(
+        &plan_path,
+        serde_json::to_vec(&plan).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
 
-    Ok(RestoreStageResult { staged_at: plan["createdAt"].as_str().unwrap_or("").to_string(), requires_restart: true })
+    Ok(RestoreStageResult {
+        staged_at: plan["createdAt"].as_str().unwrap_or("").to_string(),
+        requires_restart: true,
+    })
 }
