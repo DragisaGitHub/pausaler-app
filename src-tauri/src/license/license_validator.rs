@@ -1,5 +1,5 @@
-use ed25519_dalek::VerifyingKey;
 use base64::Engine as _;
+use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -40,7 +40,11 @@ fn parse_ed25519_public_key_from_spki_pem(public_key_pem: &str) -> Result<Verify
     VerifyingKey::from_bytes(&pk).map_err(|e| format!("invalid public key bytes: {e}"))
 }
 
-fn verify_ed25519_signature(public_key_pem: &str, payload_bytes: &[u8], signature_bytes: &[u8]) -> Result<(), String> {
+fn verify_ed25519_signature(
+    public_key_pem: &str,
+    payload_bytes: &[u8],
+    signature_bytes: &[u8],
+) -> Result<(), String> {
     let vk = parse_ed25519_public_key_from_spki_pem(public_key_pem)?;
 
     let sig: [u8; 64] = signature_bytes
@@ -59,7 +63,12 @@ struct IncomingLicensePayload {
     pub pib_hash: String,
 }
 
-pub fn verify_license(license_str: &str, expected_pib_hash: &str, public_key_pem: &str, now: OffsetDateTime) -> Result<VerifiedLicenseInfo, String> {
+pub fn verify_license(
+    license_str: &str,
+    expected_pib_hash: &str,
+    public_key_pem: &str,
+    now: OffsetDateTime,
+) -> Result<VerifiedLicenseInfo, String> {
     let parts: Vec<&str> = license_str.split('.').collect();
     if parts.len() != 2 {
         return Ok(VerifiedLicenseInfo {
@@ -73,8 +82,8 @@ pub fn verify_license(license_str: &str, expected_pib_hash: &str, public_key_pem
     let payload_bytes = base64url_decode(parts[0])?;
     let signature_bytes = base64url_decode(parts[1])?;
 
-    let payload: IncomingLicensePayload = serde_json::from_slice(&payload_bytes)
-        .map_err(|e| format!("invalid payload json: {e}"))?;
+    let payload: IncomingLicensePayload =
+        serde_json::from_slice(&payload_bytes).map_err(|e| format!("invalid payload json: {e}"))?;
 
     if payload.pib_hash != expected_pib_hash {
         return Ok(VerifiedLicenseInfo {
@@ -98,16 +107,17 @@ pub fn verify_license(license_str: &str, expected_pib_hash: &str, public_key_pem
     }
 
     match payload.license_type {
-        LicenseType::Lifetime => {
-            Ok(VerifiedLicenseInfo {
-                license_type: Some("LIFETIME".to_string()),
-                valid_until: None,
-                is_valid: true,
-                reason: None,
-            })
-        }
+        LicenseType::Lifetime => Ok(VerifiedLicenseInfo {
+            license_type: Some("LIFETIME".to_string()),
+            valid_until: None,
+            is_valid: true,
+            reason: None,
+        }),
         LicenseType::Yearly => {
-            let until = payload.valid_until.clone().ok_or_else(|| "missing valid_until".to_string())?;
+            let until = payload
+                .valid_until
+                .clone()
+                .ok_or_else(|| "missing valid_until".to_string())?;
             let valid_until = parse_time_rfc3339(&until)?;
             if now > valid_until {
                 return Ok(VerifiedLicenseInfo {
@@ -131,9 +141,9 @@ pub fn verify_license(license_str: &str, expected_pib_hash: &str, public_key_pem
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::license::license_payload::LicensePayload;
     use crate::license::crypto::base64url_encode;
-    use ed25519_dalek::{SigningKey, Signer};
+    use crate::license::license_payload::LicensePayload;
+    use ed25519_dalek::{Signer, SigningKey};
 
     fn public_key_pem_from_verifying_key(vk: &VerifyingKey) -> String {
         let prefix: [u8; 12] = [

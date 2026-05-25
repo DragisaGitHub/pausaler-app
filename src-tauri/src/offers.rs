@@ -1,14 +1,501 @@
-use std::sync::Arc;
+use std::{io::Cursor, sync::Arc};
 
-use lettre::message::{Mailbox, Message, MultiPart, SinglePart};
+use lettre::message::{header::ContentType, Attachment, Mailbox, Message, MultiPart, SinglePart};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    escape_html, format_money, now_iso, read_settings_from_conn, send_email_via_smtp,
-    validate_smtp_settings, DbState, Settings,
+    draw_inline_labeled_row, draw_rule_with_thickness, draw_value_only_wrapped, escape_html,
+    font_ascent_mm, format_money, now_iso, push_line, read_settings_from_conn, sanitize_filename,
+    send_email_via_smtp, validate_smtp_settings, wrap_text_by_width_mm, DbState, Settings,
 };
+
+#[derive(Clone, Copy)]
+struct OfferPdfLabels {
+    document_title: &'static str,
+    continuation_title: &'static str,
+    body_title: &'static str,
+    client_label: &'static str,
+    created_at_label: &'static str,
+    valid_until_label: &'static str,
+    amount_label: &'static str,
+    registration_number_label: &'static str,
+    vat_id_label: &'static str,
+    email_label: &'static str,
+    phone_label: &'static str,
+    bank_account_label: &'static str,
+    footer_generated: &'static str,
+}
+
+fn offer_pdf_labels(language: &str) -> OfferPdfLabels {
+    if language.to_ascii_lowercase().starts_with("en") {
+        OfferPdfLabels {
+            document_title: "Offer",
+            continuation_title: "Offer continuation",
+            body_title: "Offer details",
+            client_label: "Client",
+            created_at_label: "Created",
+            valid_until_label: "Valid until",
+            amount_label: "Amount",
+            registration_number_label: "Registration no.",
+            vat_id_label: "VAT ID",
+            email_label: "Email",
+            phone_label: "Phone",
+            bank_account_label: "Bank account",
+            footer_generated: "Generated from Pausaler.",
+        }
+    } else {
+        OfferPdfLabels {
+            document_title: "Ponuda",
+            continuation_title: "Nastavak ponude",
+            body_title: "Sadržaj ponude",
+            client_label: "Klijent",
+            created_at_label: "Kreirano",
+            valid_until_label: "Važi do",
+            amount_label: "Iznos",
+            registration_number_label: "Matični broj",
+            vat_id_label: "PIB",
+            email_label: "Email",
+            phone_label: "Telefon",
+            bank_account_label: "Tekući račun",
+            footer_generated: "Generisano iz aplikacije Pausaler.",
+        }
+    }
+}
+
+fn company_name_or_default(settings: &Settings) -> String {
+    let company_name = settings.company_name.trim();
+    if company_name.is_empty() {
+        "Pausaler".to_string()
+    } else {
+        company_name.to_string()
+    }
+}
+
+fn display_date_value(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return "-".to_string();
+    }
+    trimmed
+        .split_once('T')
+        .map(|(date, _)| date.trim().to_string())
+        .filter(|date| !date.is_empty())
+        .unwrap_or_else(|| trimmed.to_string())
+}
+
+fn build_offer_attachment_filename(offer: &Offer) -> String {
+    let client_name = offer.client_name.trim();
+    let subject = offer.subject.trim();
+
+    let mut parts: Vec<String> = vec!["ponuda".to_string()];
+    if !client_name.is_empty() {
+        parts.push(client_name.to_string());
+    }
+    if !subject.is_empty() {
+        parts.push(subject.to_string());
+    }
+
+    sanitize_filename(&format!("{}.pdf", parts.join("-")))
+}
+
+fn render_offer_email(settings: &Settings) -> (String, String) {
+    let company_name = escape_html(&company_name_or_default(settings));
+    let is_en = settings.language.to_ascii_lowercase().starts_with("en");
+
+    if is_en {
+        let html = format!(
+            "<!DOCTYPE html><html><body style=\"font-family:Arial,Helvetica,sans-serif;color:#111827;line-height:1.6;\"><div style=\"max-width:640px;margin:0 auto;padding:24px;\"><p style=\"margin:0 0 16px;\">Hello,</p><p style=\"margin:0 0 16px;\">Please find the offer attached in PDF format.</p><p style=\"margin:0;\">Best regards,<br />{company_name}</p></div></body></html>"
+        );
+        let text = format!(
+            "Hello,\n\nPlease find the offer attached in PDF format.\n\nBest regards,\n{}",
+            company_name_or_default(settings)
+        );
+        (html, text)
+    } else {
+        let html = format!(
+            "<!DOCTYPE html><html><body style=\"font-family:Arial,Helvetica,sans-serif;color:#111827;line-height:1.6;\"><div style=\"max-width:640px;margin:0 auto;padding:24px;\"><p style=\"margin:0 0 16px;\">Poštovani,</p><p style=\"margin:0 0 16px;\">u prilogu se nalazi ponuda u PDF formatu.</p><p style=\"margin:0;\">Srdačan pozdrav,<br />{company_name}</p></div></body></html>"
+        );
+        let text = format!(
+            "Poštovani,\n\nu prilogu se nalazi ponuda u PDF formatu.\n\nSrdačan pozdrav,\n{}",
+            company_name_or_default(settings)
+        );
+        (html, text)
+    }
+}
+
+fn generate_offer_pdf_bytes(settings: &Settings, offer: &Offer) -> Result<Vec<u8>, String> {
+    use base64::Engine as _;
+    use printpdf::{Image, ImageTransform, Mm, PdfDocument};
+
+    static FONT_BYTES: &[u8] = include_bytes!("../assets/DejaVuSans.ttf");
+
+    const PAGE_W: f32 = 210.0;
+    const PAGE_H: f32 = 297.0;
+    const PAGE_MARGIN_X: f32 = 15.0;
+    const PAGE_MARGIN_TOP: f32 = 16.0;
+    const PAGE_MARGIN_BOTTOM: f32 = 14.0;
+    const FOOTER_RESERVED_Y: f32 = PAGE_MARGIN_BOTTOM + 12.0;
+    const BODY_FONT_SIZE: f32 = 10.0;
+    const BODY_LINE_HEIGHT: f32 = 5.2;
+    const BODY_PARAGRAPH_GAP: f32 = 2.4;
+    const BODY_BLANK_LINE_GAP: f32 = 4.2;
+    const LOGO_DPI: f32 = 300.0;
+    const LOGO_AREA_W: f32 = 52.0;
+    const LOGO_GAP: f32 = 6.0;
+    const HEADER_ROW_GAP: f32 = 0.8;
+    const HEADER_LINE_HEIGHT: f32 = 4.0;
+
+    let labels = offer_pdf_labels(&settings.language);
+    let company_name = company_name_or_default(settings);
+    let created_at = display_date_value(&offer.created_at);
+    let valid_until = display_date_value(&offer.valid_until);
+    let amount_display = format!("{} {}", format_money(offer.amount), offer.currency.trim());
+
+    let decoded_logo = settings
+        .logo_url
+        .trim()
+        .strip_prefix("data:")
+        .and_then(|_| {
+            let raw = settings.logo_url.trim();
+            let comma = raw.find(',')?;
+            let (meta, data) = raw.split_at(comma);
+            if !meta.to_ascii_lowercase().contains(";base64") {
+                return None;
+            }
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&data[1..])
+                .ok()?;
+            printpdf::image_crate::load_from_memory(&bytes).ok()
+        });
+
+    let (doc, first_page, first_layer) =
+        PdfDocument::new(labels.document_title, Mm(PAGE_W), Mm(PAGE_H), "Layer 1");
+
+    let font = doc
+        .add_external_font(Cursor::new(FONT_BYTES as &[u8]))
+        .map_err(|e| e.to_string())?;
+    let font_bold = font.clone();
+    let ttf_face = ttf_parser::Face::parse(FONT_BYTES, 0)
+        .map_err(|_| "Failed to parse embedded font for measurement".to_string())?;
+
+    let content_left_x = PAGE_MARGIN_X;
+    let content_right_x = PAGE_W - PAGE_MARGIN_X;
+    let content_width = content_right_x - content_left_x;
+
+    let render_page_header =
+        |layer: &printpdf::PdfLayerReference, is_first_page: bool| -> Result<f32, String> {
+            let mut y = PAGE_H - PAGE_MARGIN_TOP;
+
+            push_line(layer, &font_bold, &company_name, 13.5, content_left_x, y);
+            let issuer_top_y = y + font_ascent_mm(&ttf_face, 13.5);
+            y -= 5.0;
+
+            let row1_text_right_x = if decoded_logo.is_some() {
+                (content_right_x - LOGO_AREA_W - LOGO_GAP).max(content_left_x)
+            } else {
+                content_right_x
+            };
+            let issuer_text_width = (row1_text_right_x - content_left_x).max(10.0);
+
+            let company_address_line = settings.company_address_line.trim();
+            let company_postal_code = settings.company_postal_code.trim();
+            let company_city = settings.company_city.trim();
+            let company_postal_and_city = [company_postal_code, company_city]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let company_address =
+                if !company_address_line.is_empty() && !company_postal_and_city.is_empty() {
+                    format!("{}, {}", company_address_line, company_postal_and_city)
+                } else if !company_address_line.is_empty() {
+                    company_address_line.to_string()
+                } else {
+                    company_postal_and_city
+                };
+
+            #[derive(Clone)]
+            struct HeaderRow {
+                label: Option<String>,
+                value: String,
+            }
+
+            let mut issuer_rows: Vec<HeaderRow> = Vec::new();
+            if !settings.registration_number.trim().is_empty() {
+                issuer_rows.push(HeaderRow {
+                    label: Some(labels.registration_number_label.to_string()),
+                    value: settings.registration_number.trim().to_string(),
+                });
+            }
+            if !settings.pib.trim().is_empty() {
+                issuer_rows.push(HeaderRow {
+                    label: Some(labels.vat_id_label.to_string()),
+                    value: settings.pib.trim().to_string(),
+                });
+            }
+            if !company_address.trim().is_empty() {
+                issuer_rows.push(HeaderRow {
+                    label: None,
+                    value: company_address,
+                });
+            }
+            if !settings.company_email.trim().is_empty() {
+                issuer_rows.push(HeaderRow {
+                    label: Some(labels.email_label.to_string()),
+                    value: settings.company_email.trim().to_string(),
+                });
+            }
+            if !settings.company_phone.trim().is_empty() {
+                issuer_rows.push(HeaderRow {
+                    label: Some(labels.phone_label.to_string()),
+                    value: settings.company_phone.trim().to_string(),
+                });
+            }
+            if !settings.bank_account.trim().is_empty() {
+                issuer_rows.push(HeaderRow {
+                    label: Some(labels.bank_account_label.to_string()),
+                    value: settings.bank_account.trim().to_string(),
+                });
+            }
+
+            let mut issuer_y = y;
+            for row in issuer_rows {
+                if let Some(label) = row.label {
+                    issuer_y = draw_inline_labeled_row(
+                        layer,
+                        &font,
+                        &ttf_face,
+                        &label,
+                        &row.value,
+                        8.8,
+                        content_left_x,
+                        issuer_y,
+                        issuer_text_width,
+                        HEADER_LINE_HEIGHT,
+                        HEADER_ROW_GAP,
+                    );
+                } else {
+                    issuer_y = draw_value_only_wrapped(
+                        layer,
+                        &font,
+                        &ttf_face,
+                        &row.value,
+                        8.8,
+                        content_left_x,
+                        issuer_y,
+                        issuer_text_width,
+                        HEADER_LINE_HEIGHT,
+                        HEADER_ROW_GAP,
+                    );
+                }
+            }
+
+            let issuer_block_height = ((PAGE_H - PAGE_MARGIN_TOP - 5.0) - issuer_y).max(0.0);
+            let mut logo_height = 0.0;
+
+            if let Some(img) = decoded_logo.as_ref() {
+                let px_w = img.width().max(1) as f32;
+                let px_h = img.height().max(1) as f32;
+                let natural_w_mm = px_w / LOGO_DPI * 25.4;
+                let natural_h_mm = px_h / LOGO_DPI * 25.4;
+                let logo_box_left = (row1_text_right_x + LOGO_GAP).min(content_right_x);
+                let logo_box_right = content_right_x;
+                let logo_box_w = (logo_box_right - logo_box_left).max(1.0);
+                let target_h = issuer_block_height.max(18.0);
+                let scale = (logo_box_w / natural_w_mm.max(1.0))
+                    .min(target_h / natural_h_mm.max(1.0))
+                    .max(0.01);
+                let scaled_w_mm = natural_w_mm * scale;
+                let scaled_h_mm = natural_h_mm * scale;
+                logo_height = scaled_h_mm;
+
+                let logo_x = (logo_box_right - scaled_w_mm).max(logo_box_left);
+                let logo_bottom_y = (issuer_top_y - scaled_h_mm).max(issuer_y + 2.0);
+                let image = Image::from_dynamic_image(img);
+                image.add_to_layer(
+                    layer.clone(),
+                    ImageTransform {
+                        translate_x: Some(Mm(logo_x)),
+                        translate_y: Some(Mm(logo_bottom_y)),
+                        rotate: None,
+                        scale_x: Some(scale),
+                        scale_y: Some(scale),
+                        dpi: Some(LOGO_DPI),
+                    },
+                );
+            }
+
+            y = y - issuer_block_height.max(logo_height) - 6.0;
+            draw_rule_with_thickness(layer, content_left_x, content_right_x, y, 0.55);
+            y -= 10.0;
+
+            let title = if is_first_page {
+                labels.document_title
+            } else {
+                labels.continuation_title
+            };
+            push_line(layer, &font_bold, title, 18.0, content_left_x, y);
+            y -= 7.0;
+
+            if is_first_page {
+                let subject = offer.subject.trim();
+                if !subject.is_empty() {
+                    for line in wrap_text_by_width_mm(&ttf_face, subject, 11.0, content_width) {
+                        push_line(layer, &font, &line, 11.0, content_left_x, y);
+                        y -= 5.2;
+                    }
+                    y -= 1.5;
+                }
+
+                let column_gap = 10.0;
+                let column_width = ((content_width - column_gap) / 2.0).max(20.0);
+                let right_column_x = content_left_x + column_width + column_gap;
+                let mut left_y = y;
+                let mut right_y = y;
+
+                left_y = draw_inline_labeled_row(
+                    layer,
+                    &font,
+                    &ttf_face,
+                    labels.client_label,
+                    offer.client_name.trim(),
+                    9.0,
+                    content_left_x,
+                    left_y,
+                    column_width,
+                    4.2,
+                    1.0,
+                );
+                left_y = draw_inline_labeled_row(
+                    layer,
+                    &font,
+                    &ttf_face,
+                    labels.created_at_label,
+                    &created_at,
+                    9.0,
+                    content_left_x,
+                    left_y,
+                    column_width,
+                    4.2,
+                    1.0,
+                );
+
+                right_y = draw_inline_labeled_row(
+                    layer,
+                    &font,
+                    &ttf_face,
+                    labels.amount_label,
+                    &amount_display,
+                    9.0,
+                    right_column_x,
+                    right_y,
+                    column_width,
+                    4.2,
+                    1.0,
+                );
+                right_y = draw_inline_labeled_row(
+                    layer,
+                    &font,
+                    &ttf_face,
+                    labels.valid_until_label,
+                    &valid_until,
+                    9.0,
+                    right_column_x,
+                    right_y,
+                    column_width,
+                    4.2,
+                    1.0,
+                );
+
+                y = left_y.min(right_y) - 2.5;
+                draw_rule_with_thickness(layer, content_left_x, content_right_x, y, 0.35);
+                y -= 8.0;
+            } else {
+                y -= 2.0;
+            }
+
+            push_line(
+                layer,
+                &font_bold,
+                labels.body_title,
+                10.5,
+                content_left_x,
+                y,
+            );
+            y -= 3.6;
+            draw_rule_with_thickness(layer, content_left_x, content_right_x, y, 0.35);
+            y -= 7.0;
+
+            let footer_rule_y = PAGE_MARGIN_BOTTOM + 8.0;
+            draw_rule_with_thickness(layer, content_left_x, content_right_x, footer_rule_y, 0.25);
+            push_line(
+                layer,
+                &font,
+                labels.footer_generated,
+                6.2,
+                content_left_x,
+                PAGE_MARGIN_BOTTOM + 2.0,
+            );
+
+            Ok(y)
+        };
+
+    let mut layer = doc.get_page(first_page).get_layer(first_layer);
+    let mut y = render_page_header(&layer, true)?;
+
+    let body = offer.body.trim();
+    if body.is_empty() {
+        push_line(&layer, &font, "-", BODY_FONT_SIZE, content_left_x, y);
+    } else {
+        for raw_line in body.lines() {
+            let line = raw_line.trim_end();
+            if line.trim().is_empty() {
+                if y - BODY_BLANK_LINE_GAP <= FOOTER_RESERVED_Y {
+                    let (page, layer_id) = doc.add_page(Mm(PAGE_W), Mm(PAGE_H), "Layer");
+                    layer = doc.get_page(page).get_layer(layer_id);
+                    y = render_page_header(&layer, false)?;
+                } else {
+                    y -= BODY_BLANK_LINE_GAP;
+                }
+                continue;
+            }
+
+            let wrapped_lines =
+                wrap_text_by_width_mm(&ttf_face, line, BODY_FONT_SIZE, content_width);
+            for wrapped_line in wrapped_lines {
+                if y - BODY_LINE_HEIGHT <= FOOTER_RESERVED_Y {
+                    let (page, layer_id) = doc.add_page(Mm(PAGE_W), Mm(PAGE_H), "Layer");
+                    layer = doc.get_page(page).get_layer(layer_id);
+                    y = render_page_header(&layer, false)?;
+                }
+
+                push_line(
+                    &layer,
+                    &font,
+                    &wrapped_line,
+                    BODY_FONT_SIZE,
+                    content_left_x,
+                    y,
+                );
+                y -= BODY_LINE_HEIGHT;
+            }
+
+            if y - BODY_PARAGRAPH_GAP <= FOOTER_RESERVED_Y {
+                let (page, layer_id) = doc.add_page(Mm(PAGE_W), Mm(PAGE_H), "Layer");
+                layer = doc.get_page(page).get_layer(layer_id);
+                y = render_page_header(&layer, false)?;
+            } else {
+                y -= BODY_PARAGRAPH_GAP;
+            }
+        }
+    }
+
+    let mut writer = std::io::BufWriter::new(Vec::<u8>::new());
+    doc.save(&mut writer).map_err(|e| e.to_string())?;
+    writer.into_inner().map_err(|e| e.to_string())
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -104,7 +591,9 @@ fn required_trimmed(value: String, field_name: &str) -> Result<String, String> {
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
-    value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    value
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 fn validate_offer(offer: &Offer) -> Result<(), String> {
@@ -211,39 +700,6 @@ fn persist_offer(conn: &Connection, offer: &Offer) -> Result<(), rusqlite::Error
     Ok(())
 }
 
-fn render_offer_email(settings: &Settings, offer: &Offer) -> (String, String) {
-    let company_name = if settings.company_name.trim().is_empty() {
-        "Pausaler".to_string()
-    } else {
-        settings.company_name.trim().to_string()
-    };
-
-    let safe_company_name = escape_html(&company_name);
-    let safe_client_name = escape_html(&offer.client_name);
-    let safe_subject = escape_html(&offer.subject);
-    let safe_body = escape_html(&offer.body).replace('\n', "<br />");
-    let amount = format_money(offer.amount);
-    let safe_currency = escape_html(&offer.currency);
-    let safe_valid_until = escape_html(&offer.valid_until);
-
-    let html = format!(
-        "<!DOCTYPE html><html><body style=\"font-family:Arial,Helvetica,sans-serif;color:#111827;line-height:1.6;\"><div style=\"max-width:640px;margin:0 auto;padding:24px;\"><p style=\"margin:0 0 16px;\">Poštovani/a {safe_client_name},</p><p style=\"margin:0 0 16px;\">U nastavku je ponuda iz kompanije <strong>{safe_company_name}</strong>.</p><div style=\"border:1px solid #e5e7eb;border-radius:12px;padding:20px;margin:0 0 20px;\"><h2 style=\"margin:0 0 12px;font-size:20px;\">{safe_subject}</h2><p style=\"margin:0 0 12px;\">{safe_body}</p><table style=\"width:100%;border-collapse:collapse;\"><tr><td style=\"padding:8px 0;color:#6b7280;\">Iznos</td><td style=\"padding:8px 0;text-align:right;font-weight:600;\">{amount} {safe_currency}</td></tr><tr><td style=\"padding:8px 0;color:#6b7280;\">Važi do</td><td style=\"padding:8px 0;text-align:right;\">{safe_valid_until}</td></tr></table></div><p style=\"margin:0;color:#6b7280;\">Poslato iz aplikacije Pausaler.</p></div></body></html>"
-    );
-
-    let text = format!(
-        "Poštovani/a {},\n\nU nastavku je ponuda iz kompanije {}.\n\n{}\n\n{}\n\nIznos: {} {}\nVaži do: {}\n\nPoslato iz aplikacije Pausaler.",
-        offer.client_name,
-        company_name,
-        offer.subject,
-        offer.body,
-        amount,
-        offer.currency,
-        offer.valid_until,
-    );
-
-    (html, text)
-}
-
 #[tauri::command]
 pub(crate) async fn get_all_offers(state: tauri::State<'_, DbState>) -> Result<Vec<Offer>, String> {
     state
@@ -268,7 +724,9 @@ pub(crate) async fn get_offer_by_id(
     id: String,
 ) -> Result<Option<Offer>, String> {
     state
-        .with_read("get_offer_by_id", move |conn| read_offer_from_conn(conn, &id))
+        .with_read("get_offer_by_id", move |conn| {
+            read_offer_from_conn(conn, &id)
+        })
         .await
 }
 
@@ -413,15 +871,25 @@ pub(crate) async fn send_offer_email(
         .parse()
         .map_err(|_| "Invalid recipient email address.".to_string())?;
 
-    let (html_body, text_body) = render_offer_email(&settings, &offer);
+    let (html_body, text_body) = render_offer_email(&settings);
+    let alternative = MultiPart::alternative()
+        .singlepart(SinglePart::plain(text_body))
+        .singlepart(SinglePart::html(html_body));
+
+    let pdf_bytes = generate_offer_pdf_bytes(&settings, &offer)?;
+    let filename = build_offer_attachment_filename(&offer);
+    let content_type = ContentType::parse("application/pdf")
+        .map_err(|e| format!("Failed to build PDF attachment content type: {e}"))?;
+    let attachment = Attachment::new(filename).body(pdf_bytes, content_type);
+
     let email = Message::builder()
         .from(from_mailbox)
         .to(to_mailbox)
         .subject(subject)
         .multipart(
-            MultiPart::alternative()
-                .singlepart(SinglePart::plain(text_body))
-                .singlepart(SinglePart::html(html_body)),
+            MultiPart::mixed()
+                .multipart(alternative)
+                .singlepart(attachment),
         )
         .map_err(|e| format!("Failed to build email: {e}"))?;
 
