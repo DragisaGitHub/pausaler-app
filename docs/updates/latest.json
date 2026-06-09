@@ -1,18 +1,14 @@
 {
-  "version": "1.0.15",
-  "date": "2026-05-25",
+  "version": "1.0.16",
+  "date": "2026-06-09",
   "downloadUrl": "https://github.com/DragisaGitHub/pausaler-app/releases/latest/download/Paushaler-setup.exe",
-  "releasedAt": "2026-05-25T00:00:00Z",
+  "releasedAt": "2026-06-09T00:00:00Z",
   "notes": [
     "SR:",
-    "• Ponude se sada šalju kao profesionalni PDF dokumenti u prilogu email poruke.",
-    "• PDF ponude podržavaju automatski prikaz logotipa firme iz podešavanja.",
-    "• Poboljšan je izgled i profesionalna prezentacija poslovnih ponuda pri slanju klijentima.",
+    "• Dodata je napomena da je faktura validna bez potpisa i pečata.",
     "",
     "EN:",
-    "• Offers are now sent as professional PDF attachments via email.",
-    "• Offer PDFs now support automatic company logo rendering from settings.",
-    "• Improved professional presentation of business offers when sending them to clients."
+    "• Added a note that the invoice is valid without a signature or stamp."
   ],
   "windows": {
     "nsis": "https://github.com/DragisaGitHub/pausaler-app/releases/latest/download/Paushaler-setup.exe",
